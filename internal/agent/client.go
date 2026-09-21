@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -213,6 +214,76 @@ func (c *Client) GetArtifact(ctx context.Context, artifactID string) (model.Arti
 func (c *Client) CreateProject(ctx context.Context, req model.CreateProjectRequest) (model.Project, error) {
 	var out model.Project
 	return out, c.do(ctx, http.MethodPost, "/projects", req, &out)
+}
+
+// GetProject returns the project context visible to this agent. For a listed
+// closed project an outsider receives only its public listing.
+func (c *Client) GetProject(ctx context.Context, projectID string) (model.Project, error) {
+	var out model.Project
+	return out, c.do(ctx, http.MethodGet, "/projects/"+url.PathEscape(projectID), nil, &out)
+}
+
+// ApplyToProject requests membership in a listed closed project whose policy
+// permits self-service applications. Approval remains the owner's decision.
+func (c *Client) ApplyToProject(ctx context.Context, projectID string) (model.ProjectMembership, error) {
+	var out model.ProjectMembership
+	return out, c.do(ctx, http.MethodPost, "/projects/"+url.PathEscape(projectID)+"/apply", nil, &out)
+}
+
+// FindProjectsByRepository returns projects the caller may discover that are
+// bound to this Git repository identity.
+func (c *Client) FindProjectsByRepository(ctx context.Context, repository string) ([]model.Project, error) {
+	var out struct {
+		Projects []model.Project `json:"projects"`
+	}
+	q := url.Values{}
+	q.Set("repository", repository)
+	return out.Projects, c.do(ctx, http.MethodGet, "/discovery/projects/by-repository?"+q.Encode(), nil, &out)
+}
+
+// LocalRepository is the repository identity of the shared open project for
+// checkouts with no Git origin, so local agents still land in one workspace.
+const LocalRepository = "git@local:default"
+
+// EnsureProjectForRepository finds the project bound to repository, creating
+// an open one (no approval step) when none exists. Two agents racing to create
+// it can leave two; every caller then picks the oldest, so they still converge.
+func (c *Client) EnsureProjectForRepository(ctx context.Context, repository string) (p model.Project, created bool, err error) {
+	projects, err := c.FindProjectsByRepository(ctx, repository)
+	if err != nil {
+		return model.Project{}, false, err
+	}
+	if len(projects) == 0 {
+		normalized, err := model.NormalizeRepository(repository)
+		if err != nil {
+			return model.Project{}, false, err
+		}
+		name := path.Base(normalized)
+		if repository == LocalRepository {
+			name = "local"
+		}
+		if _, err := c.CreateProject(ctx, model.CreateProjectRequest{
+			Name:       name,
+			Objective:  "Auto-created open project for " + normalized,
+			Visibility: model.ProjectOpen,
+			Repository: repository,
+		}); err != nil {
+			return model.Project{}, false, err
+		}
+		created = true
+		if projects, err = c.FindProjectsByRepository(ctx, repository); err != nil {
+			return model.Project{}, false, err
+		}
+	}
+	if len(projects) == 0 {
+		return model.Project{}, false, fmt.Errorf("project for %q not found after creation", repository)
+	}
+	return projects[0], created, nil
+}
+
+func (c *Client) BindProjectRepository(ctx context.Context, projectID, repository string) (model.Project, error) {
+	var out model.Project
+	return out, c.do(ctx, http.MethodPost, "/projects/"+url.PathEscape(projectID)+"/repository", map[string]string{"repository": repository}, &out)
 }
 
 // RequestOperator delivers a bounded wish, request or issue to the configured

@@ -34,6 +34,14 @@ func (s *ProjectStore) Create(ctx context.Context, owner string, req model.Creat
 	if policy == "" {
 		policy = model.PolicyInviteOnly
 	}
+	metadata := map[string]any{}
+	if req.Repository != "" {
+		repository, err := model.NormalizeRepository(req.Repository)
+		if err != nil {
+			return model.Project{}, err
+		}
+		metadata["repository"] = repository
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -43,7 +51,7 @@ func (s *ProjectStore) Create(ctx context.Context, owner string, req model.Creat
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO projects (`+projectColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, "1.0", req.Name, req.Objective, visibility, boolToInt(listed), policy, owner, nil, model.ProjectActive, now, "{}",
+		id, "1.0", req.Name, req.Objective, visibility, boolToInt(listed), policy, owner, nil, model.ProjectActive, now, toJSON(metadata),
 	); err != nil {
 		return model.Project{}, err
 	}
@@ -83,10 +91,59 @@ func scanProject(row interface{ Scan(...any) error }) (model.Project, error) {
 	}
 	p.Listed = listed != 0
 	p.Metadata = fromJSON[map[string]any](metadataJSON)
+	p.Repository, _ = p.Metadata["repository"].(string)
 	if t, perr := time.Parse(time.RFC3339, createdAtStr); perr == nil {
 		p.CreatedAt = t
 	}
 	return p, nil
+}
+
+// FindByRepository returns only projects the caller can already discover.
+// An exact repository identity is required, so this endpoint is not a broad
+// project enumeration mechanism.
+func (s *ProjectStore) FindByRepository(ctx context.Context, agentID, repository string) ([]model.Project, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+projectColumns+`, (
+ SELECT status FROM project_members m WHERE m.project_id=projects.project_id AND m.agent_id=?
+ ) AS my_status FROM projects WHERE json_extract(metadata,'$.repository')=? ORDER BY created_at, project_id`, agentID, repository)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Project
+	for rows.Next() {
+		var p model.Project
+		var listed int
+		var metadataJSON, createdAtStr string
+		var myStatus, pendingOwner sql.NullString
+		if err := rows.Scan(&p.ProjectID, &p.SchemaVersion, &p.Name, &p.Objective, &p.Visibility, &listed, &p.MembershipPolicy, &p.Owner, &pendingOwner, &p.Status, &createdAtStr, &metadataJSON, &myStatus); err != nil {
+			return nil, err
+		}
+		p.Listed = listed != 0
+		p.Metadata = fromJSON[map[string]any](metadataJSON)
+		p.Repository, _ = p.Metadata["repository"].(string)
+		if pendingOwner.Valid {
+			p.PendingOwner = &pendingOwner.String
+		}
+		if t, e := time.Parse(time.RFC3339, createdAtStr); e == nil {
+			p.CreatedAt = t
+		}
+		member := myStatus.Valid && myStatus.String == model.MemberActive
+		if p.Visibility == model.ProjectClosed && !member && p.Owner != agentID {
+			if !p.Listed {
+				continue
+			}
+			p = p.Listing()
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *ProjectStore) SetRepository(ctx context.Context, projectID, repository string) (model.Project, error) {
+	if _, err := s.db.ExecContext(ctx, `UPDATE projects SET metadata=json_set(COALESCE(metadata,'{}'),'$.repository',?) WHERE project_id=?`, repository, projectID); err != nil {
+		return model.Project{}, err
+	}
+	return s.Get(ctx, projectID)
 }
 
 func (s *ProjectStore) Get(ctx context.Context, id string) (model.Project, error) {

@@ -232,3 +232,21 @@ func (s *Server) handleDiscoverProjects(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
 }
+
+func (s *Server) handleFindProjectByRepository(w http.ResponseWriter, r *http.Request) {
+	repository, err := model.NormalizeRepository(r.URL.Query().Get("repository"))
+	if err != nil {
+		s.writeErr(w, model.ValidationError(err.Error()))
+		return
+	}
+	agentID, _ := AgentIDFromContext(r.Context())
+	projects, err := s.Projects.FindByRepository(r.Context(), agentID, repository)
+	if err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	if projects == nil {
+		projects = []model.Project{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repository": repository, "projects": projects})
+}

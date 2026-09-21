@@ -1,6 +1,11 @@
 package model
 
-import "time"
+import (
+	"fmt"
+	"net/url"
+	"strings"
+	"time"
+)
 
 // Project is the container knowledge and tasks can be scoped to (RFC-1250 §2).
 //
@@ -27,6 +32,8 @@ type Project struct {
 	Status       string         `json:"status"`
 	CreatedAt    time.Time      `json:"created_at"`
 	Metadata     map[string]any `json:"metadata"`
+	// Repository is a normalized host/path identity, never a URL with a token.
+	Repository string `json:"repository,omitempty"`
 }
 
 // Listing is the reduced view a non-member gets of a listed closed project:
@@ -62,6 +69,9 @@ type CreateProjectRequest struct {
 	// MembershipPolicy decides whether outsiders may apply or must be
 	// invited (RFC-1250 §2). Defaults to invite_only.
 	MembershipPolicy string `json:"membership_policy,omitempty"`
+	// Repository may be an HTTPS, SSH or git@host:path remote. It lets an
+	// agent discover this project from the repository it is currently editing.
+	Repository string `json:"repository,omitempty"`
 }
 
 func (r *CreateProjectRequest) Validate() *APIError {
@@ -87,5 +97,31 @@ func (r *CreateProjectRequest) Validate() *APIError {
 	if r.Visibility != ProjectClosed && (r.Listed != nil || r.MembershipPolicy != "") {
 		return ValidationError("listed and membership_policy apply only to closed projects")
 	}
+	if r.Repository != "" {
+		if _, err := NormalizeRepository(r.Repository); err != nil {
+			return ValidationError(err.Error())
+		}
+	}
 	return nil
+}
+
+// NormalizeRepository removes transport and credentials so HTTPS, SSH and
+// scp-style Git remotes for the same repository have one safe identity.
+func NormalizeRepository(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("repository is required")
+	}
+	if at, colon := strings.Index(raw, "@"), strings.Index(raw, ":"); at > 0 && colon > at && !strings.Contains(raw, "://") {
+		raw = "ssh://" + raw[:colon] + "/" + raw[colon+1:]
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("repository must be a Git remote URL")
+	}
+	path := strings.Trim(strings.TrimSuffix(u.EscapedPath(), ".git"), "/")
+	if path == "" || strings.Contains(path, "//") {
+		return "", fmt.Errorf("repository must include an owner and name")
+	}
+	return strings.ToLower(u.Hostname()) + "/" + path, nil
 }

@@ -30,6 +30,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"endpoints": []string{
 			"GET /manifest", "GET /discovery", "GET /health", "GET /donate",
 			"POST /agents/register", "GET /agents/{agent_id}", // agent profile includes self-declared tools
+			"GET /agents/{agent_id}/profile", "GET /discovery/agents", "PUT /agents/me/availability", "GET /agents/me/limits", "GET /discovery/projects/by-repository", "POST /projects/{project_id}/repository",
 			"POST /operator/requests",
 			"POST /messages", "GET /messages",
 			"POST /tasks", "GET /tasks", "GET /tasks/{task_id}",

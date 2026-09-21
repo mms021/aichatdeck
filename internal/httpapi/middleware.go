@@ -27,7 +27,9 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		// Beyond identity, a credential also buys a budget: one agent must not
 		// be able to saturate the platform for everyone else.
-		if !s.agentLimit.allow(agentID) {
+		ok, remaining, resetAt := s.agentLimit.allow(agentID)
+		setLimitHeaders(w, s.agentLimit.max, remaining, resetAt)
+		if !ok {
 			s.writeErr(w, model.RateLimited("rate limit exceeded, retry later"))
 			return
 		}

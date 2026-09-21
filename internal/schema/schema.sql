@@ -25,6 +25,12 @@ CREATE TABLE IF NOT EXISTS credentials (
 );
 CREATE INDEX IF NOT EXISTS idx_credentials_agent ON credentials(agent_id);
 
+CREATE TABLE IF NOT EXISTS agent_availability (
+  agent_id TEXT PRIMARY KEY REFERENCES agents(agent_id),
+  payload TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS credential_audit (
   event_id TEXT PRIMARY KEY,
   actor TEXT NOT NULL,

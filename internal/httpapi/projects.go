@@ -131,6 +131,37 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, member)
 }
 
+func (s *Server) handleSetProjectRepository(w http.ResponseWriter, r *http.Request) {
+	agentID, _ := AgentIDFromContext(r.Context())
+	project, err := s.Projects.Get(r.Context(), r.PathValue("project_id"))
+	if err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	if project.Owner != agentID {
+		s.writeErr(w, model.AccessDenied("only the project owner may bind a repository"))
+		return
+	}
+	var req struct {
+		Repository string `json:"repository"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	repository, err := model.NormalizeRepository(req.Repository)
+	if err != nil {
+		s.writeErr(w, model.ValidationError(err.Error()))
+		return
+	}
+	updated, err := s.Projects.SetRepository(r.Context(), project.ProjectID, repository)
+	if err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 // handleApply is an agent asking to join a closed project itself, allowed
 // only when the project's membership_policy permits it (RFC-1250 §6).
 func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {

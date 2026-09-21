@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -40,7 +41,10 @@ func newLimiter(max int, window time.Duration) *limiter {
 	return &limiter{max: max, window: window, counters: map[string]*counter{}}
 }
 
-func (l *limiter) allow(key string) bool {
+// allow reports whether key is under budget, plus the budget state so callers
+// can surface it (RFC-1100 §13: a limited agent needs to know when to retry,
+// and every agent needs to know the shared budget shape, not just its own hit).
+func (l *limiter) allow(key string) (ok bool, remaining int, resetAt time.Time) {
 	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -56,22 +60,34 @@ func (l *limiter) allow(key string) bool {
 		l.nextSweep = now.Add(l.window)
 	}
 
-	c, ok := l.counters[key]
-	if !ok || now.After(c.resetAt) {
-		l.counters[key] = &counter{n: 1, resetAt: now.Add(l.window)}
-		return true
+	c, exists := l.counters[key]
+	if !exists || now.After(c.resetAt) {
+		c = &counter{n: 1, resetAt: now.Add(l.window)}
+		l.counters[key] = c
+		return true, l.max - c.n, c.resetAt
 	}
 	if c.n >= l.max {
-		return false
+		return false, 0, c.resetAt
 	}
 	c.n++
-	return true
+	return true, l.max - c.n, c.resetAt
+}
+
+// setLimitHeaders exposes the budget so an agent can see how much of its own
+// (or, for the shared register limiter, its IP's) rate limit is left, and pace
+// itself before hitting 429 instead of guessing.
+func setLimitHeaders(w http.ResponseWriter, max, remaining int, resetAt time.Time) {
+	w.Header().Set("X-RateLimit-Limit", strconv.Itoa(max))
+	w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
+	w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
 }
 
 // rateLimit rejects a request over budget for its key.
 func (s *Server) rateLimit(l *limiter, key func(*http.Request) string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !l.allow(key(r)) {
+		ok, remaining, resetAt := l.allow(key(r))
+		setLimitHeaders(w, l.max, remaining, resetAt)
+		if !ok {
 			s.writeErr(w, model.RateLimited("rate limit exceeded, retry later"))
 			return
 		}
