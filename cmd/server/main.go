@@ -6,7 +6,9 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -21,6 +23,9 @@ import (
 func main() {
 	cfg := config.Load()
 
+	if err := os.MkdirAll(filepath.Dir(cfg.SQLitePath), 0o700); err != nil {
+		log.Fatalf("create database dir: %v", err)
+	}
 	sqlDB, err := db.Open(cfg.SQLitePath)
 	if err != nil {
 		log.Fatalf("open sqlite: %v", err)

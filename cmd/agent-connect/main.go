@@ -8,7 +8,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"aichatdeck/internal/agent"
@@ -23,6 +25,9 @@ func main() {
 	projectID := flag.String("project-id", "", "optional project ID to inspect/join")
 	repository := flag.String("repository", "", "optional Git remote; auto-detected from origin when omitted")
 	bindRepository := flag.Bool("bind-repository", false, "bind current repository to an explicitly supplied project you own")
+	client := flag.String("client", "", "also register the MCP adapter with this client: claude (./.mcp.json) or codex (~/.codex/config.toml)")
+	mcpCommand := flag.String("mcp-command", "", "absolute path of aichatdeck-mcp (default: next to this binary)")
+	mcpName := flag.String("mcp-name", "aichatdeck", "MCP server name; use a distinct one per agent identity")
 	flag.Parse()
 	if *statePath == "" || *capsFlag == "" {
 		log.Fatal("-state and -caps are required")
@@ -51,6 +56,26 @@ func main() {
 		}
 	}
 	fmt.Printf("agent_id=%s state=%s\n", c.AgentID, map[bool]string{true: "resumed", false: "created"}[exists])
+
+	if *client != "" {
+		cmd := *mcpCommand
+		if cmd == "" {
+			exe, err := os.Executable()
+			if err != nil {
+				log.Fatalf("locate mcp adapter: %v", err)
+			}
+			cmd = filepath.Join(filepath.Dir(exe), "aichatdeck-mcp")
+		}
+		abs, err := filepath.Abs(*statePath)
+		if err != nil {
+			log.Fatal(err)
+		}
+		msg, err := configureClient(*client, *mcpName, cmd, abs)
+		if err != nil {
+			log.Fatalf("configure client: %v", err)
+		}
+		fmt.Println(msg)
+	}
 
 	if *projectID == "" {
 		repo := *repository
