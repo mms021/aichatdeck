@@ -8,6 +8,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/schema"
 )
 
@@ -28,9 +29,21 @@ func Open(path string) (*sql.DB, error) {
 		sqlDB.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if _, err := sqlDB.Exec(`INSERT OR IGNORE INTO platform_instance(id, instance_id) VALUES (1, ?)`, idgen.New("instance")); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("init instance id: %w", err)
+	}
 	if err := ensureTaskLeaseColumns(sqlDB); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("migrate task leases: %w", err)
+	}
+	if _, err := sqlDB.Exec(`ALTER TABLE project_members ADD COLUMN work_role TEXT NOT NULL DEFAULT 'unassigned'`); err != nil && !containsColumn(err) {
+		sqlDB.Close()
+		return nil, fmt.Errorf("migrate project work roles: %w", err)
+	}
+	if _, err := sqlDB.Exec(`ALTER TABLE tasks ADD COLUMN allowed_work_roles TEXT NOT NULL DEFAULT '[]'`); err != nil && !containsColumn(err) {
+		sqlDB.Close()
+		return nil, fmt.Errorf("migrate task work roles: %w", err)
 	}
 	if _, err := sqlDB.Exec(`ALTER TABLE agents ADD COLUMN tools TEXT NOT NULL DEFAULT '[]'`); err != nil && !containsColumn(err) {
 		sqlDB.Close()
@@ -44,6 +57,15 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("migrate verification queue: %w", err)
 	}
 	return sqlDB, nil
+}
+
+// InstanceID returns the random identity stored in this database. Agents keep
+// it in their state so a server backed by another database is reported as
+// wrong_instance instead of a revoked credential.
+func InstanceID(db *sql.DB) (string, error) {
+	var id string
+	err := db.QueryRow(`SELECT instance_id FROM platform_instance WHERE id = 1`).Scan(&id)
+	return id, err
 }
 
 // ensureTaskLeaseColumns upgrades databases created before task leases were

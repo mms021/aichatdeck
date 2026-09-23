@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,23 @@ type State struct {
 	AgentID string `json:"agent_id"`
 	Token   string `json:"token"`
 	BaseURL string `json:"base_url"`
+	// InstanceID is the server database identity seen at registration. Empty
+	// in state files written before instance identity existed.
+	InstanceID string `json:"instance_id,omitempty"`
+}
+
+// ErrWrongInstance means the server at BaseURL is backed by a different
+// database than the one this identity was registered with, so its credential
+// cannot be valid there. The state file must be kept as is.
+var ErrWrongInstance = errors.New("wrong_instance: server database differs from the one this agent registered with; state left unchanged")
+
+// CheckInstance compares the stored instance with the server's. Legacy state
+// without an instance, or a server that does not report one, is accepted.
+func (s State) CheckInstance(serverInstance string) error {
+	if s.InstanceID != "" && serverInstance != "" && s.InstanceID != serverInstance {
+		return ErrWrongInstance
+	}
+	return nil
 }
 
 // LoadState reads agent state from path. A missing file is not an error: it

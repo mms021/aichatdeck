@@ -61,11 +61,11 @@ func (s *TaskStore) Create(ctx context.Context, createdBy string, req model.Crea
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO tasks (task_id, schema_version, objective, context, constraints, required_capabilities, required_tools, success_criteria, status, owner, team_id, project_id, created_by, idempotency_key, created_at, deadline)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		INSERT INTO tasks (task_id, schema_version, objective, context, constraints, required_capabilities, required_tools, success_criteria, status, owner, team_id, project_id, created_by, idempotency_key, created_at, deadline, allowed_work_roles)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		taskID, "1.0", req.Objective, toJSON(orEmptyMap(req.Context)), toJSON(orEmptySlice(req.Constraints)),
 		toJSON(orEmptySlice(req.RequiredCapabilities)), toJSON(orEmptySlice(req.RequiredTools)), toJSON(orEmptySlice(req.SuccessCriteria)),
-		model.TaskOpen, nil, nil, nullableString(req.ProjectID), createdBy, nullIfEmpty(idempotencyKey), now, deadline,
+		model.TaskOpen, nil, nil, nullableString(req.ProjectID), createdBy, nullIfEmpty(idempotencyKey), now, deadline, toJSON(orEmptySlice(req.AllowedWorkRoles)),
 	)
 	if err != nil {
 		if idempotencyKey != "" && isUniqueViolation(err) {
@@ -83,11 +83,11 @@ func (s *TaskStore) Create(ctx context.Context, createdBy string, req model.Crea
 
 func scanTask(row interface{ Scan(...any) error }) (model.Task, error) {
 	var t model.Task
-	var contextJSON, constraintsJSON, reqCapsJSON, reqToolsJSON, successJSON string
+	var contextJSON, constraintsJSON, reqCapsJSON, reqToolsJSON, successJSON, workRolesJSON string
 	var owner, teamID, projectID, deadline, claimedAt, leaseExpiresAt, claimID, submittedMessageID sql.NullString
 	var createdAtStr string
 	err := row.Scan(&t.TaskID, &t.SchemaVersion, &t.Objective, &contextJSON, &constraintsJSON, &reqCapsJSON, &reqToolsJSON,
-		&successJSON, &t.Status, &owner, &teamID, &projectID, &t.CreatedBy, &createdAtStr, &deadline, &claimedAt, &leaseExpiresAt, &claimID, &submittedMessageID)
+		&successJSON, &t.Status, &owner, &teamID, &projectID, &t.CreatedBy, &createdAtStr, &deadline, &claimedAt, &leaseExpiresAt, &claimID, &submittedMessageID, &workRolesJSON)
 	if err != nil {
 		return model.Task{}, err
 	}
@@ -101,6 +101,7 @@ func scanTask(row interface{ Scan(...any) error }) (model.Task, error) {
 	t.RequiredCapabilities = fromJSON[[]string](reqCapsJSON)
 	t.RequiredTools = fromJSON[[]string](reqToolsJSON)
 	t.SuccessCriteria = fromJSON[[]string](successJSON)
+	t.AllowedWorkRoles = fromJSON[[]string](workRolesJSON)
 	if owner.Valid {
 		t.Owner = &owner.String
 	}
@@ -128,7 +129,7 @@ func scanTask(row interface{ Scan(...any) error }) (model.Task, error) {
 	return t, nil
 }
 
-const taskColumns = `task_id, schema_version, objective, context, constraints, required_capabilities, required_tools, success_criteria, status, owner, team_id, project_id, created_by, created_at, deadline, claimed_at, lease_expires_at, claim_id, submitted_message_id`
+const taskColumns = `task_id, schema_version, objective, context, constraints, required_capabilities, required_tools, success_criteria, status, owner, team_id, project_id, created_by, created_at, deadline, claimed_at, lease_expires_at, claim_id, submitted_message_id, allowed_work_roles`
 
 // Get returns a task if the viewer may see it. A task inside a closed project
 // the viewer does not belong to reports not_found, not access_denied —

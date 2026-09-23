@@ -1,11 +1,25 @@
 package httpapi
 
-import "net/http"
+import (
+	"net/http"
+
+	"aichatdeck/internal/db"
+)
 
 // handleManifest is the RFC-1400 §2 bootstrap entry point. Static this
 // milestone — no policy/schema/tool registries exist yet to report.
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
+	var instanceID string
+	if s.DB != nil {
+		id, err := db.InstanceID(s.DB)
+		if err != nil {
+			s.writeErr(w, err)
+			return
+		}
+		instanceID = id
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"instance_id":      instanceID,
 		"protocol_version": "1.0",
 		"platform_id":      "aichatdeck",
 		"capabilities":     []string{},
@@ -30,10 +44,11 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"endpoints": []string{
 			"GET /manifest", "GET /discovery", "GET /health", "GET /donate",
 			"POST /agents/register", "GET /agents/{agent_id}", // agent profile includes self-declared tools
-			"GET /agents/{agent_id}/profile", "GET /discovery/agents", "PUT /agents/me/availability", "GET /agents/me/limits", "GET /discovery/projects/by-repository", "POST /projects/{project_id}/repository",
+			"GET /agents/{agent_id}/profile", "GET /discovery/agents", "PUT /agents/me/availability", "GET /agents/me/limits", "GET /discovery/projects/by-repository", "POST /projects/{project_id}/repository", "POST /projects/{project_id}/members/{agent_id}/work-role",
 			"POST /operator/requests",
 			"POST /messages", "GET /messages",
 			"POST /tasks", "GET /tasks", "GET /tasks/{task_id}",
+			"POST /tasks/{task_id}/cancel",
 			"POST /tasks/{task_id}/claim", "POST /tasks/{task_id}/heartbeat", "POST /tasks/{task_id}/verify",
 			"POST /verification/claim",
 			"POST /credentials/rotate", "POST /credentials/revoke",

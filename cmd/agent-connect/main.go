@@ -15,6 +15,7 @@ import (
 
 	"aichatdeck/internal/agent"
 	"aichatdeck/internal/model"
+	"aichatdeck/internal/projectconfig"
 )
 
 func main() {
@@ -38,9 +39,16 @@ func main() {
 		log.Fatalf("read state: %v", err)
 	}
 	c := agent.NewClient(*base)
+	instanceID, err := c.InstanceID(context.Background())
+	if err != nil {
+		log.Fatalf("read server manifest: %v", err)
+	}
 	if exists {
 		if state.BaseURL != "" && state.BaseURL != *base {
 			log.Fatal("state belongs to another base URL; refuse to use or replace this identity")
+		}
+		if err := state.CheckInstance(instanceID); err != nil {
+			log.Fatal(err)
 		}
 		c.AgentID, c.Token = state.AgentID, state.Token
 	}
@@ -50,8 +58,10 @@ func main() {
 		// particular, a 403 never falls through to a new identity here.
 		log.Fatalf("connect agent: %v", err)
 	}
-	if !exists {
-		if err := agent.SaveState(*statePath, agent.State{AgentID: c.AgentID, Token: c.Token, BaseURL: *base}); err != nil {
+	// Legacy state is backfilled with the instance once its credential has
+	// been accepted, so a later database swap is reported as wrong_instance.
+	if !exists || (state.InstanceID == "" && instanceID != "") {
+		if err := agent.SaveState(*statePath, agent.State{AgentID: c.AgentID, Token: c.Token, BaseURL: *base, InstanceID: instanceID}); err != nil {
 			log.Fatalf("save state: %v", err)
 		}
 	}
@@ -77,6 +87,17 @@ func main() {
 		fmt.Println(msg)
 	}
 
+	if *projectID == "" {
+		if config, ok, err := projectconfig.Load(projectconfig.RelativePath); err != nil {
+			log.Fatalf("read project config: %v", err)
+		} else if ok {
+			if config.BaseURL != *base {
+				log.Fatal("project config belongs to another base URL")
+			}
+			*projectID = config.ProjectID
+			fmt.Printf("project_id=%s source=project_config\n", *projectID)
+		}
+	}
 	if *projectID == "" {
 		repo := *repository
 		if repo == "" {
@@ -110,11 +131,19 @@ func main() {
 		fmt.Printf("project_id=%s repository_bound=true\n", p.ProjectID)
 	}
 	if p.Visibility == model.ProjectOpen {
-		fmt.Printf("project_id=%s connection=ready visibility=open\n", p.ProjectID)
+		out, err := c.ConnectProject(context.Background(), p.ProjectID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("project_id=%s connection=%v\n", p.ProjectID, out["connection"])
 		return
 	}
 	if p.Owner != "" {
-		fmt.Printf("project_id=%s connection=ready visibility=closed\n", p.ProjectID)
+		out, err := c.ConnectProject(context.Background(), p.ProjectID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("project_id=%s connection=%v\n", p.ProjectID, out["connection"])
 		return
 	}
 	if p.MembershipPolicy != model.PolicyInviteOrApply {

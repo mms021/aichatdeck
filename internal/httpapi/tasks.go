@@ -112,6 +112,29 @@ func (s *Server) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 			s.writeErr(w, model.AccessDenied("reviewer access is read-only and cannot claim tasks"))
 			return
 		}
+		member, memberErr := s.Members.Get(r.Context(), project.ProjectID, agentID)
+		if memberErr != nil && !model.IsCode(memberErr, model.ErrNotFound) {
+			s.writeErr(w, memberErr)
+			return
+		}
+		managed, err := s.Members.HasOrchestrator(r.Context(), project.ProjectID)
+		if err != nil {
+			s.writeErr(w, err)
+			return
+		}
+		restricted := managed || memberErr == nil && member.WorkRole != model.WorkRoleUnassigned
+		if restricted && agentID != project.Owner && member.Role != model.RoleOrchestrator &&
+			(memberErr != nil || member.Status != model.MemberActive || member.WorkRole == model.WorkRoleUnassigned || len(target.AllowedWorkRoles) == 0) {
+			s.writeErr(w, model.AccessDenied("await role assignment or choose a task explicitly allowed for your work role"))
+			return
+		}
+		if len(target.AllowedWorkRoles) > 0 {
+			member, err := s.Members.Get(r.Context(), project.ProjectID, agentID)
+			if err != nil || member.Status != model.MemberActive || !workRoleAllowed(member.WorkRole, target.AllowedWorkRoles) {
+				s.writeErr(w, model.AccessDenied("agent lacks a project-assigned work role for this task"))
+				return
+			}
+		}
 	}
 	claimer, err := s.Agents.Get(r.Context(), agentID)
 	if err != nil {
@@ -133,6 +156,15 @@ func (s *Server) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, task)
+}
+
+func workRoleAllowed(have string, allowed []string) bool {
+	for _, role := range allowed {
+		if have == role {
+			return true
+		}
+	}
+	return false
 }
 
 func agentMatchesTools(tools []model.Tool, required []string) bool {

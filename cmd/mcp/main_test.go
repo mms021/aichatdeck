@@ -51,7 +51,7 @@ func TestStdioMainInitializationAndToolCall(t *testing.T) {
 	}
 	defer session.Close()
 	listed, err := session.ListTools(ctx, nil)
-	if err != nil || len(listed.Tools) != 23 {
+	if err != nil || len(listed.Tools) != 30 {
 		t.Fatalf("tools: %+v %v", listed, err)
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_tasks", Arguments: map[string]any{}})

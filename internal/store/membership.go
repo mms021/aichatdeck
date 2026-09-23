@@ -56,13 +56,13 @@ type MembershipStore struct{ db *sql.DB }
 
 func NewMembershipStore(db *sql.DB) *MembershipStore { return &MembershipStore{db: db} }
 
-const membershipColumns = `project_id, agent_id, status, role, invited_by, joined_at, scope, expires_at, created_at`
+const membershipColumns = `project_id, agent_id, status, role, work_role, invited_by, joined_at, scope, expires_at, created_at`
 
 func scanMembership(row interface{ Scan(...any) error }) (model.ProjectMembership, error) {
 	var m model.ProjectMembership
 	var invitedBy, joinedAt, scope, expiresAt sql.NullString
 	var createdAt string
-	if err := row.Scan(&m.ProjectID, &m.AgentID, &m.Status, &m.Role, &invitedBy, &joinedAt, &scope, &expiresAt, &createdAt); err != nil {
+	if err := row.Scan(&m.ProjectID, &m.AgentID, &m.Status, &m.Role, &m.WorkRole, &invitedBy, &joinedAt, &scope, &expiresAt, &createdAt); err != nil {
 		return model.ProjectMembership{}, err
 	}
 	if invitedBy.Valid {
@@ -150,17 +150,46 @@ func (s *MembershipStore) Invite(ctx context.Context, projectID, agentID, invite
 	}
 
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO project_members (`+membershipColumns+`) VALUES (?,?,?,?,?,?,?,?,?)
+		INSERT INTO project_members (`+membershipColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(project_id, agent_id) DO UPDATE SET
 			status=excluded.status, role=excluded.role, invited_by=excluded.invited_by,
 			joined_at=excluded.joined_at, scope=excluded.scope, expires_at=excluded.expires_at,
 			created_at=excluded.created_at`,
-		projectID, agentID, status, model.RoleMember, nullIfEmpty(invitedBy), joinedAt, scope, expiresAt, now.Format(time.RFC3339),
+		projectID, agentID, status, model.RoleMember, model.WorkRoleUnassigned, nullIfEmpty(invitedBy), joinedAt, scope, expiresAt, now.Format(time.RFC3339),
 	)
 	if err != nil {
 		return model.ProjectMembership{}, err
 	}
 	return s.Get(ctx, projectID, agentID)
+}
+
+// SetWorkRole is owner-authorized by the HTTP layer. Open projects do not
+// normally need membership rows, so this creates one solely to persist the
+// server-granted specialization.
+func (s *MembershipStore) SetWorkRole(ctx context.Context, projectID, agentID, workRole string) (model.ProjectMembership, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO project_members (`+membershipColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?)
+	 ON CONFLICT(project_id,agent_id) DO UPDATE SET work_role=excluded.work_role`, projectID, agentID, model.MemberActive, model.RoleMember, workRole, nil, now, nil, nil, now)
+	if err != nil {
+		return model.ProjectMembership{}, err
+	}
+	return s.Get(ctx, projectID, agentID)
+}
+
+// Enroll records an open-project participant without resetting existing roles.
+func (s *MembershipStore) Enroll(ctx context.Context, projectID, agentID string) (model.ProjectMembership, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO project_members (project_id,agent_id,status,created_at,joined_at) VALUES (?,?,'active',?,?)`, projectID, agentID, now, now)
+	if err != nil {
+		return model.ProjectMembership{}, err
+	}
+	return s.Get(ctx, projectID, agentID)
+}
+
+func (s *MembershipStore) HasOrchestrator(ctx context.Context, projectID string) (bool, error) {
+	var found bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id=? AND role='orchestrator' AND status='active')`, projectID).Scan(&found)
+	return found, err
 }
 
 // Decide resolves a pending invitation or application. Declining removes the

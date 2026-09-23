@@ -16,9 +16,29 @@ const (
 // the RFC-1200 sense (those are out of scope) but an authority inside one
 // project.
 const (
-	RoleMember      = "member"
-	RoleCoordinator = "coordinator"
+	RoleMember       = "member"
+	RoleCoordinator  = "coordinator"
+	RoleOrchestrator = "orchestrator"
 )
+
+// Work roles are granted by the project owner and checked by the server when
+// a task declares a restricted execution role.
+const (
+	WorkRoleUnassigned = "unassigned"
+	WorkRoleDeveloper  = "developer"
+	WorkRoleTester     = "tester"
+	WorkRoleReviewer   = "reviewer"
+	WorkRoleResearcher = "researcher"
+)
+
+func ValidWorkRole(role string) bool {
+	switch role {
+	case WorkRoleUnassigned, WorkRoleDeveloper, WorkRoleTester, WorkRoleReviewer, WorkRoleResearcher:
+		return true
+	default:
+		return false
+	}
+}
 
 // Membership policies, RFC-1250 §2.
 const (
@@ -33,6 +53,7 @@ type ProjectMembership struct {
 	AgentID   string     `json:"agent_id"`
 	Status    string     `json:"status"`
 	Role      string     `json:"role"`
+	WorkRole  string     `json:"work_role"`
 	InvitedBy *string    `json:"invited_by"`
 	JoinedAt  *time.Time `json:"joined_at"`
 	Scope     *string    `json:"scope"`
@@ -104,10 +125,22 @@ type SetRoleRequest struct {
 
 func (r *SetRoleRequest) Validate() *APIError {
 	switch r.Role {
-	case RoleMember, RoleCoordinator:
+	case RoleMember, RoleCoordinator, RoleOrchestrator:
 		return nil
 	}
-	return ValidationError("role must be member or coordinator")
+	return ValidationError("role must be member, coordinator or orchestrator")
+}
+
+type SetWorkRoleRequest struct {
+	Generation int64  `json:"generation,omitempty"`
+	WorkRole   string `json:"work_role"`
+}
+
+func (r *SetWorkRoleRequest) Validate() *APIError {
+	if !ValidWorkRole(r.WorkRole) {
+		return ValidationError("invalid work_role")
+	}
+	return nil
 }
 
 // TransferRequest nominates the next owner. The nomination alone changes

@@ -93,6 +93,17 @@ func (c *Client) Manifest(ctx context.Context) (map[string]any, error) {
 	return out, c.do(ctx, http.MethodGet, "/manifest", nil, &out)
 }
 
+// InstanceID returns the server's database identity from its manifest, or ""
+// when an older server does not report one.
+func (c *Client) InstanceID(ctx context.Context) (string, error) {
+	m, err := c.Manifest(ctx)
+	if err != nil {
+		return "", err
+	}
+	id, _ := m["instance_id"].(string)
+	return id, nil
+}
+
 // Register performs RFC-1400 §7 registration and stores the issued
 // agent_id/token on the client. Called with an existing token it is the
 // idempotent re-register path, which refreshes the profile in place.
@@ -221,6 +232,12 @@ func (c *Client) CreateProject(ctx context.Context, req model.CreateProjectReque
 func (c *Client) GetProject(ctx context.Context, projectID string) (model.Project, error) {
 	var out model.Project
 	return out, c.do(ctx, http.MethodGet, "/projects/"+url.PathEscape(projectID), nil, &out)
+}
+
+func (c *Client) ConnectProject(ctx context.Context, projectID string) (map[string]any, error) {
+	var out map[string]any
+	err := c.do(ctx, http.MethodPost, "/projects/"+url.PathEscape(projectID)+"/connection", nil, &out)
+	return out, err
 }
 
 // ApplyToProject requests membership in a listed closed project whose policy

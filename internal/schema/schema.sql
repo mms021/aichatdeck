@@ -1,3 +1,10 @@
+-- One row: random identity of this database, stable across restarts and
+-- file moves, different for every fresh database.
+CREATE TABLE IF NOT EXISTS platform_instance (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  instance_id TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS agents (
   agent_id TEXT PRIMARY KEY,
   schema_version TEXT NOT NULL DEFAULT '1.0',
@@ -67,7 +74,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   claimed_at TEXT,
   lease_expires_at TEXT,
   claim_id TEXT,
-  submitted_message_id TEXT
+  submitted_message_id TEXT,
+  allowed_work_roles TEXT NOT NULL DEFAULT '[]'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idem ON tasks(created_by, idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -133,6 +141,7 @@ CREATE TABLE IF NOT EXISTS project_members (
   -- role is orthogonal to status: a coordinator is an active member with the
   -- authority to invite and remove others (RFC-1250 §2).
   role TEXT NOT NULL DEFAULT 'member',  -- member|coordinator
+  work_role TEXT NOT NULL DEFAULT 'unassigned', -- developer|tester|reviewer|researcher
   invited_by TEXT,
   joined_at TEXT,
   scope TEXT,                      -- reviewer only: the single task_id in view
@@ -141,6 +150,22 @@ CREATE TABLE IF NOT EXISTS project_members (
   PRIMARY KEY (project_id, agent_id)
 );
 CREATE INDEX IF NOT EXISTS idx_members_agent ON project_members(agent_id, status);
+
+CREATE TABLE IF NOT EXISTS project_leadership (
+ project_id TEXT PRIMARY KEY REFERENCES projects(project_id),
+ agent_id TEXT NOT NULL REFERENCES agents(agent_id),
+ generation INTEGER NOT NULL,
+ lease_until TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS progress_checkpoints (
+ seq INTEGER PRIMARY KEY AUTOINCREMENT,
+ project_id TEXT NOT NULL REFERENCES projects(project_id),
+ task_id TEXT REFERENCES tasks(task_id),
+ author TEXT NOT NULL REFERENCES agents(agent_id),
+ generation INTEGER,
+ payload TEXT NOT NULL,
+ created_at TEXT NOT NULL
+);
 
 -- Shared memory (RFC-1300). project_id NULL means global: visible to every
 -- agent (RFC-1250 §11).

@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -227,5 +228,23 @@ func TestRegistrationIsRateLimited(t *testing.T) {
 	}
 	if !limited {
 		t.Error("registration accepted 40 requests in a burst without limiting")
+	}
+}
+
+// The manifest reports the database identity and nothing that locates it.
+func TestManifestReportsInstanceIDOnly(t *testing.T) {
+	srv, sqlDB := newBreakableServer(t)
+	want, err := db.InstanceID(sqlDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anon := &client{t: t, base: srv.URL}
+	status, body := anon.do(http.MethodGet, "/manifest", nil)
+	if status != http.StatusOK || body["instance_id"] != want {
+		t.Fatalf("manifest %d instance_id=%v want %s", status, body["instance_id"], want)
+	}
+	raw, _ := json.Marshal(body)
+	if strings.Contains(string(raw), ".db") || strings.Contains(string(raw), "token") {
+		t.Fatalf("manifest leaks storage detail: %s", raw)
 	}
 }

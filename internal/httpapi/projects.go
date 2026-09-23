@@ -376,7 +376,69 @@ func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if project.Visibility == model.ProjectOpen {
+		if _, err := s.Agents.Get(r.Context(), subjectID); err != nil {
+			s.writeErr(w, err)
+			return
+		}
+		if _, err := s.Members.Enroll(r.Context(), projectID, subjectID); err != nil {
+			s.writeErr(w, err)
+			return
+		}
+	}
 	member, err := s.Members.SetRole(r.Context(), projectID, subjectID, req.Role)
+	if err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, member)
+}
+
+// handleSetWorkRole assigns a server-enforced execution specialization. It
+// intentionally remains owner-only: coordinators organize work but cannot
+// broaden their own or others' execution authority.
+func (s *Server) handleSetWorkRole(w http.ResponseWriter, r *http.Request) {
+	callerID, _ := AgentIDFromContext(r.Context())
+	projectID, subjectID := r.PathValue("project_id"), r.PathValue("agent_id")
+	var req model.SetWorkRoleRequest
+	if err := decodeJSON(r, &req); err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	if err := req.Validate(); err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	project, err := s.Projects.Get(r.Context(), projectID)
+	if err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	if !s.isOrchestrator(r, project, callerID) {
+		s.writeErr(w, model.AccessDenied("only owner or orchestrator may assign work roles"))
+		return
+	}
+	if project.Status != model.ProjectActive {
+		s.writeErr(w, model.Conflict("project is archived"))
+		return
+	}
+	if project.Visibility == model.ProjectClosed {
+		m, err := s.Members.Get(r.Context(), projectID, subjectID)
+		if err != nil || m.Status != model.MemberActive {
+			s.writeErr(w, model.AccessDenied("subject must be an active member"))
+			return
+		}
+	}
+	if _, err := s.Agents.Get(r.Context(), subjectID); err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	var member model.ProjectMembership
+	if project.Owner != callerID {
+		member, err = s.Members.AssignWithLease(r.Context(), projectID, callerID, subjectID, req.WorkRole, req.Generation)
+	} else {
+		member, err = s.Members.SetWorkRole(r.Context(), projectID, subjectID, req.WorkRole)
+	}
 	if err != nil {
 		s.writeErr(w, err)
 		return

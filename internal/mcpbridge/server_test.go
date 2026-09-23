@@ -109,12 +109,70 @@ func TestMCPCoreLoopUsesPlatformAuthorization(t *testing.T) {
 		t.Fatalf("project repository discovery: %+v", found)
 	}
 	connected := call(t, w, "connect_to_project", map[string]any{"project_id": project.ProjectID})
-	if connected["connection"] != "ready" {
+	if connected["connection"] != "awaiting_assignment" {
 		t.Fatalf("project connection: %+v", connected)
+	}
+	orchestrator := agent.NewClient(h.URL)
+	if err := orchestrator.Register(ctx, model.RegisterRequest{Capabilities: []model.Capability{{Name: "coordination"}}}); err != nil {
+		t.Fatal(err)
+	}
+	os, err := New(h.URL, orchestrator.AgentID, orchestrator.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := connect(t, os)
+	call(t, c, "appoint_orchestrator", map[string]any{"project_id": project.ProjectID, "agent_id": orchestrator.AgentID})
+	queue := call(t, o, "list_assignment_queue", map[string]any{"project_id": project.ProjectID})
+	if len(queue["participants"].([]any)) != 1 {
+		t.Fatalf("queue: %+v", queue)
+	}
+	lease := call(t, o, "manage_leadership", map[string]any{"project_id": project.ProjectID, "generation": 0})
+	call(t, o, "save_checkpoint", map[string]any{"project_id": project.ProjectID, "generation": lease["generation"], "progress": map[string]any{"next": "test registration"}})
+	call(t, o, "assign_work_role", map[string]any{"project_id": project.ProjectID, "agent_id": worker.AgentID, "work_role": "tester", "generation": lease["generation"]})
+	call(t, o, "manage_leadership", map[string]any{"project_id": project.ProjectID, "generation": lease["generation"], "target_agent_id": creator.AgentID})
+	stale, e := o.CallTool(ctx, &mcp.CallToolParams{Name: "assign_work_role", Arguments: map[string]any{"project_id": project.ProjectID, "agent_id": worker.AgentID, "work_role": "developer", "generation": lease["generation"]}})
+	if e != nil || !stale.IsError {
+		t.Fatal("old leader retained authority")
+	}
+	progress := call(t, c, "get_project_progress", map[string]any{"project_id": project.ProjectID})
+	if len(progress["checkpoints"].([]any)) != 1 {
+		t.Fatal("handoff lost checkpoint")
+	}
+	assignment := call(t, w, "get_my_assignment", map[string]any{"project_id": project.ProjectID})
+	if assignment["connection"] != "ready" {
+		t.Fatalf("assignment: %+v", assignment)
+	}
+	again := call(t, w, "connect_to_project", map[string]any{"project_id": project.ProjectID})
+	if again["membership"].(map[string]any)["work_role"] != "tester" {
+		t.Fatal("reconnect reset role")
+	}
+	deniedAppointment, e := o.CallTool(ctx, &mcp.CallToolParams{Name: "appoint_orchestrator", Arguments: map[string]any{"project_id": project.ProjectID, "agent_id": worker.AgentID}})
+	if e != nil || !deniedAppointment.IsError {
+		t.Fatal("orchestrator escalated authority")
+	}
+	untyped := call(t, c, "create_task", map[string]any{"project_id": project.ProjectID, "objective": "untyped"})
+	deniedUntyped, e := w.CallTool(ctx, &mcp.CallToolParams{Name: "claim_task", Arguments: map[string]any{"task_id": untyped["task_id"]}})
+	if e != nil || !deniedUntyped.IsError {
+		t.Fatal("tester claimed unrestricted task")
+	}
+	other, err := creator.CreateProject(ctx, model.CreateProjectRequest{Name: "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedOther, e := o.CallTool(ctx, &mcp.CallToolParams{Name: "assign_work_role", Arguments: map[string]any{"project_id": other.ProjectID, "agent_id": worker.AgentID, "work_role": "developer"}})
+	if e != nil || !deniedOther.IsError {
+		t.Fatal("cross-project authority")
 	}
 	if got := call(t, w, "get_project", map[string]any{"project_id": project.ProjectID}); got["project_id"] != project.ProjectID {
 		t.Fatalf("project lookup: %+v", got)
 	}
+	call(t, c, "assign_work_role", map[string]any{"project_id": project.ProjectID, "agent_id": worker.AgentID, "work_role": "tester"})
+	restricted := call(t, c, "create_task", map[string]any{"objective": "test-only task", "project_id": project.ProjectID, "allowed_work_roles": []string{"tester"}})
+	denied, err := c.CallTool(ctx, &mcp.CallToolParams{Name: "claim_task", Arguments: map[string]any{"task_id": restricted["task_id"]}})
+	if err != nil || !denied.IsError {
+		t.Fatalf("unassigned owner claimed restricted task: %+v %v", denied, err)
+	}
+	call(t, w, "claim_task", map[string]any{"task_id": restricted["task_id"]})
 	memory := call(t, w, "publish_memory", map[string]any{"category": "lesson", "content": map[string]any{"summary": "MCP lesson"}})
 	if memory["status"] != "proposed" || memory["author"] != worker.AgentID {
 		t.Fatalf("memory identity/status: %+v", memory)
@@ -123,7 +181,7 @@ func TestMCPCoreLoopUsesPlatformAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Tools) != 23 {
+	if len(list.Tools) != 30 {
 		t.Fatalf("tool count=%d", len(list.Tools))
 	}
 	for _, tool := range list.Tools {
@@ -133,7 +191,7 @@ func TestMCPCoreLoopUsesPlatformAuthorization(t *testing.T) {
 	}
 	task := call(t, c, "create_task", map[string]any{"objective": "MCP task"})
 	id := task["task_id"].(string)
-	page := call(t, w, "list_tasks", map[string]any{"status": "OPEN", "limit": 1})
+	page := call(t, w, "list_tasks", map[string]any{"status": "OPEN", "limit": 1, "project_id": ""})
 	if len(page["tasks"].([]any)) != 1 {
 		t.Fatalf("missing task: %+v", page)
 	}
