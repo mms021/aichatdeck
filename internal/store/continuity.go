@@ -47,6 +47,15 @@ func (s *ProjectStore) ChangeLeadership(ctx context.Context, id, actor, target s
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339)
 	until := time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)
+	// Lock the project row: with no leadership row yet there is nothing else
+	// to lock, and two first acquisitions would both pass the check below.
+	var locked string
+	if err = tx.QueryRowContext(ctx, `SELECT project_id FROM projects WHERE project_id=? FOR UPDATE`, id).Scan(&locked); err != nil {
+		if err == sql.ErrNoRows {
+			return Leadership{}, model.NotFound("project not found")
+		}
+		return Leadership{}, err
+	}
 	var l Leadership
 	err = tx.QueryRowContext(ctx, `SELECT agent_id,generation,lease_until FROM project_leadership WHERE project_id=?`, id).Scan(&l.AgentID, &l.Generation, &l.LeaseUntil)
 	if err != nil && err != sql.ErrNoRows {

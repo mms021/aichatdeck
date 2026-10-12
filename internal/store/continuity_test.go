@@ -2,14 +2,14 @@ package store
 
 import (
 	"aichatdeck/internal/db"
+	"aichatdeck/internal/db/dbtest"
 	"aichatdeck/internal/model"
 	"context"
-	"path/filepath"
 	"testing"
 )
 
 func TestLeadershipExpiryAndDurability(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "continuity.db")
+	path := dbtest.URL(t)
 	database, err := db.Open(path)
 	if err != nil {
 		t.Fatal(err)

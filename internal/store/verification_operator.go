@@ -76,11 +76,11 @@ func (s *TaskStore) ClaimVerificationAlert(ctx context.Context) (taskID, token s
 	defer tx.Rollback()
 	now := time.Now().UTC()
 	stamp := now.Format(time.RFC3339)
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO verification_alerts(task_id) SELECT j.task_id FROM verification_jobs j JOIN tasks t ON t.task_id=j.task_id WHERE `+exhaustedVerification, stamp)
+	_, err = tx.ExecContext(ctx, `INSERT INTO verification_alerts(task_id) SELECT j.task_id FROM verification_jobs j JOIN tasks t ON t.task_id=j.task_id WHERE `+exhaustedVerification+` ON CONFLICT DO NOTHING`, stamp)
 	if err != nil {
 		return "", "", err
 	}
-	err = tx.QueryRowContext(ctx, `SELECT a.task_id FROM verification_alerts a JOIN verification_jobs j ON j.task_id=a.task_id JOIN tasks t ON t.task_id=j.task_id WHERE a.sent=0 AND a.lease_until<=? AND `+exhaustedVerification+` ORDER BY a.task_id LIMIT 1`, stamp, stamp).Scan(&taskID)
+	err = tx.QueryRowContext(ctx, `SELECT a.task_id FROM verification_alerts a JOIN verification_jobs j ON j.task_id=a.task_id JOIN tasks t ON t.task_id=j.task_id WHERE a.sent=0 AND a.lease_until<=? AND `+exhaustedVerification+` ORDER BY a.task_id LIMIT 1 FOR UPDATE OF a SKIP LOCKED`, stamp, stamp).Scan(&taskID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", nil
 	}

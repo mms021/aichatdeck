@@ -110,7 +110,7 @@ func (s *Server) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		if stored.Recipient != model.BroadcastRecipient {
 			channel = bus.AgentChannel(stored.Recipient)
 		}
-		_ = s.Bus.Publish(r.Context(), channel) // best-effort wakeup; SQLite is the source of truth either way
+		_ = s.Bus.Publish(r.Context(), channel) // best-effort wakeup; PostgreSQL is the source of truth either way
 	}
 
 	status := http.StatusCreated
@@ -120,7 +120,7 @@ func (s *Server) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, stored)
 }
 
-// handleListMessages is GET /messages: an immediate poll of SQLite, or — if
+// handleListMessages is GET /messages: an immediate poll of PostgreSQL, or — if
 // empty and wait_seconds is set — a long-poll woken by the Redis pub/sub
 // ping published in handlePostMessage.
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {

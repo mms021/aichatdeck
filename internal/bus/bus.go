@@ -1,5 +1,5 @@
 // Package bus is the wakeup-signal pub/sub used by GET /messages long-poll.
-// It never carries the message envelope itself — SQLite is always the
+// It never carries the message envelope itself — PostgreSQL is always the
 // source of truth; a bus message is just "something changed, go re-query."
 package bus
 

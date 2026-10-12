@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+
+	"aichatdeck/internal/db"
 )
 
 func toJSON(v any) string {
@@ -46,9 +48,7 @@ func nullIfEmpty(s string) any {
 	return s
 }
 
-func isUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
-}
+func isUniqueViolation(err error) bool { return db.IsUniqueViolation(err) }
 
 // encodeSeqCursor/decodeSeqCursor carry a monotonic insertion sequence — the
 // message inbox pages on that rather than on a timestamp, which is not unique

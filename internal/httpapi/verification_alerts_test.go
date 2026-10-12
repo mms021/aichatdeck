@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"aichatdeck/internal/db"
+	"aichatdeck/internal/db/dbtest"
 	"aichatdeck/internal/model"
 	"aichatdeck/internal/store"
 )
@@ -33,7 +33,7 @@ func (m *alertMessenger) Send(_ context.Context, text string) (int64, error) {
 
 func TestVerificationAlertsAndAuthorizedRetry(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(filepath.Join(t.TempDir(), "alerts.db"))
+	database, err := db.Open(dbtest.URL(t))
 	if err != nil {
 		t.Fatal(err)
 	}

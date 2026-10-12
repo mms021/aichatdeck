@@ -6,13 +6,14 @@ import (
 	"errors"
 	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
 
-type ProjectStore struct{ db *sql.DB }
+type ProjectStore struct{ db *db.DB }
 
-func NewProjectStore(db *sql.DB) *ProjectStore { return &ProjectStore{db: db} }
+func NewProjectStore(d *db.DB) *ProjectStore { return &ProjectStore{db: d} }
 
 const projectColumns = `project_id, schema_version, name, objective, visibility, listed, membership_policy, owner, pending_owner, status, created_at, metadata`
 
@@ -104,7 +105,7 @@ func scanProject(row interface{ Scan(...any) error }) (model.Project, error) {
 func (s *ProjectStore) FindByRepository(ctx context.Context, agentID, repository string) ([]model.Project, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+projectColumns+`, (
  SELECT status FROM project_members m WHERE m.project_id=projects.project_id AND m.agent_id=?
- ) AS my_status FROM projects WHERE json_extract(metadata,'$.repository')=? ORDER BY created_at, project_id`, agentID, repository)
+ ) AS my_status FROM projects WHERE metadata->>'repository'=? ORDER BY created_at, project_id`, agentID, repository)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +141,7 @@ func (s *ProjectStore) FindByRepository(ctx context.Context, agentID, repository
 }
 
 func (s *ProjectStore) SetRepository(ctx context.Context, projectID, repository string) (model.Project, error) {
-	if _, err := s.db.ExecContext(ctx, `UPDATE projects SET metadata=json_set(COALESCE(metadata,'{}'),'$.repository',?) WHERE project_id=?`, repository, projectID); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE projects SET metadata=jsonb_set(metadata,'{repository}',to_jsonb(?::text)) WHERE project_id=?`, repository, projectID); err != nil {
 		return model.Project{}, err
 	}
 	return s.Get(ctx, projectID)
@@ -165,11 +166,13 @@ func (s *ProjectStore) Get(ctx context.Context, id string) (model.Project, error
 // oracle (§13).
 func (s *ProjectStore) List(ctx context.Context, agentID string) ([]model.Project, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT `+projectColumns+`, (
-			SELECT status FROM project_members m
-			WHERE m.project_id = projects.project_id AND m.agent_id = ?
-		) AS my_status
-		FROM projects
+		SELECT * FROM (
+			SELECT `+projectColumns+`, (
+				SELECT status FROM project_members m
+				WHERE m.project_id = projects.project_id AND m.agent_id = ?
+			) AS my_status
+			FROM projects
+		) visible
 		WHERE visibility = 'open' OR listed = 1 OR my_status IS NOT NULL
 		ORDER BY created_at, project_id`, agentID)
 	if err != nil {
@@ -241,7 +244,7 @@ func (s *ProjectStore) AcceptTransfer(ctx context.Context, projectID, newOwner s
 	var currentOwner, visibility string
 	var pending sql.NullString
 	err = tx.QueryRowContext(ctx,
-		`SELECT owner, pending_owner, visibility FROM projects WHERE project_id=?`, projectID).
+		`SELECT owner, pending_owner, visibility FROM projects WHERE project_id=? FOR UPDATE`, projectID).
 		Scan(&currentOwner, &pending, &visibility)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Project{}, model.NotFound("project not found")

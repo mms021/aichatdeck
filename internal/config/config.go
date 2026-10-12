@@ -1,14 +1,11 @@
 // Package config loads server configuration from the environment.
 package config
 
-import (
-	"os"
-	"path/filepath"
-)
+import "os"
 
 type Config struct {
 	Addr                  string // HTTP listen address
-	SQLitePath            string
+	DatabaseURL           string // PostgreSQL connection URL
 	RedisAddr             string
 	TelegramBotToken      string
 	TelegramChatID        string
@@ -19,7 +16,7 @@ type Config struct {
 func Load() Config {
 	return Config{
 		Addr:                  getenv("ADDR", ":8080"),
-		SQLitePath:            getenv("SQLITE_PATH", defaultSQLitePath()),
+		DatabaseURL:           getenv("DATABASE_URL", "postgres://aichatdeck:aichatdeck@localhost:5432/aichatdeck?sslmode=disable"),
 		RedisAddr:             getenv("REDIS_ADDR", "localhost:6379"),
 		TelegramBotToken:      getenv("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:        getenv("TELEGRAM_CHAT_ID", ""),
@@ -33,14 +30,4 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// defaultSQLitePath is absolute so the database, and with it every agent
-// identity, does not depend on which directory the server was started from.
-func defaultSQLitePath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "aichatdeck.db"
-	}
-	return filepath.Join(home, ".aichatdeck", "aichatdeck.db")
 }

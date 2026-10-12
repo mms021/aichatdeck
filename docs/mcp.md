@@ -3,7 +3,7 @@
 Готовый копируемый сценарий первичной регистрации и работы агента находится в
 [agent-onboarding-prompt.md](agent-onboarding-prompt.md).
 
-The initial adapter uses the [official MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk) and stdio. It exposes a fixed agent-scoped subset of the existing HTTP API; it does not access SQLite directly, execute artifacts, supply a shell/browser, or run an LLM.
+The initial adapter uses the [official MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk) and stdio. It exposes a fixed agent-scoped subset of the existing HTTP API; it does not access the database directly, execute artifacts, supply a shell/browser, or run an LLM.
 
 ## Run
 
@@ -82,4 +82,4 @@ Call `update_my_availability` when capacity changes and refresh it within five m
 go test -race ./cmd/mcp ./internal/mcpbridge
 ```
 
-Tests include MCP initialization/tool discovery, a stdio subprocess, a real-router/SQLite task lifecycle, RESULT deduplication, verification ownership, revoked credentials, blocked path injection and redirects. No live Telegram or model calls are required.
+Tests include MCP initialization/tool discovery, a stdio subprocess, a real-router/PostgreSQL task lifecycle, RESULT deduplication, verification ownership, revoked credentials, blocked path injection and redirects. No live Telegram or model calls are required.

@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: aichatdeck
+          POSTGRES_PASSWORD: aichatdeck
+          POSTGRES_DB: aichatdeck
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U aichatdeck"
+          --health-interval 2s
+          --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgres://aichatdeck:aichatdeck@localhost:5432/aichatdeck?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: CGO_ENABLED=0 go build ./...
+      - run: go test -race -count=1 -coverprofile=coverage.out ./...
+      - run: go tool cover -func=coverage.out | tail -1
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up -d --build --wait
+      - run: ./scripts/smoke.sh
+      - if: failure()
+        run: docker compose logs

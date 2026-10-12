@@ -6,18 +6,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"aichatdeck/internal/bus"
 	"aichatdeck/internal/db"
+	"aichatdeck/internal/db/dbtest"
 	"aichatdeck/internal/httpapi"
 	"aichatdeck/internal/model"
 	"aichatdeck/internal/store"
 )
 
-// newTestServer wires a real router against a temp-file SQLite DB and an
+// newTestServer wires a real router against a per-test PostgreSQL schema and an
 // in-memory fake bus — no live Redis needed.
 func newTestServer(t *testing.T) *httptest.Server {
 	return newTestServerWithNotifier(t, nil)
@@ -32,7 +32,7 @@ func (f *fakeOperatorNotifier) Notify(_ context.Context, _ string, req model.Ope
 
 func newTestServerWithNotifier(t *testing.T, notifier httpapi.OperatorNotifier) *httptest.Server {
 	t.Helper()
-	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "e2e.db"))
+	sqlDB, err := db.Open(dbtest.URL(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

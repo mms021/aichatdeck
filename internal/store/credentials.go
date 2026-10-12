@@ -8,13 +8,14 @@ import (
 	"errors"
 	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
 
-type CredentialStore struct{ db *sql.DB }
+type CredentialStore struct{ db *db.DB }
 
-func NewCredentialStore(db *sql.DB) *CredentialStore { return &CredentialStore{db: db} }
+func NewCredentialStore(d *db.DB) *CredentialStore { return &CredentialStore{db: d} }
 
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
@@ -62,7 +63,7 @@ func (s *CredentialStore) Rotate(ctx context.Context, token string) (model.Crede
 	}
 	defer tx.Rollback()
 	var agentID, oldID string
-	if err := tx.QueryRowContext(ctx, `SELECT agent_id,credential_id FROM credentials WHERE token_hash=? AND status='active'`, hashToken(token)).Scan(&agentID, &oldID); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT agent_id,credential_id FROM credentials WHERE token_hash=? AND status='active' FOR UPDATE`, hashToken(token)).Scan(&agentID, &oldID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return model.CredentialOut{}, err
 		}
@@ -82,7 +83,7 @@ func (s *CredentialStore) Rotate(ctx context.Context, token string) (model.Crede
 	return out, tx.Commit()
 }
 
-func credentialAudit(ctx context.Context, tx *sql.Tx, actor, agentID, credentialID, action string) error {
+func credentialAudit(ctx context.Context, tx *db.Tx, actor, agentID, credentialID, action string) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO credential_audit(event_id,actor,agent_id,credential_id,action,created_at) VALUES(?,?,?,?,?,?)`, idgen.New("credential-event"), actor, agentID, credentialID, action, time.Now().UTC().Format(time.RFC3339))
 	return err
 }
@@ -94,7 +95,7 @@ func (s *CredentialStore) RevokeCurrent(ctx context.Context, token string) error
 	}
 	defer tx.Rollback()
 	var agentID, credID string
-	if err := tx.QueryRowContext(ctx, `SELECT agent_id,credential_id FROM credentials WHERE token_hash=? AND status='active'`, hashToken(token)).Scan(&agentID, &credID); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT agent_id,credential_id FROM credentials WHERE token_hash=? AND status='active' FOR UPDATE`, hashToken(token)).Scan(&agentID, &credID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}

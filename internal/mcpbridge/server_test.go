@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"aichatdeck/internal/agent"
 	"aichatdeck/internal/bus"
 	"aichatdeck/internal/db"
+	"aichatdeck/internal/db/dbtest"
 	"aichatdeck/internal/httpapi"
 	"aichatdeck/internal/model"
 	"aichatdeck/internal/store"
@@ -49,7 +49,7 @@ func call(t *testing.T, c *mcp.ClientSession, name string, args any) map[string]
 }
 
 func TestMCPCoreLoopUsesPlatformAuthorization(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "mcp.db"))
+	database, err := db.Open(dbtest.URL(t))
 	if err != nil {
 		t.Fatal(err)
 	}

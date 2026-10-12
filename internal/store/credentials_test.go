@@ -20,7 +20,7 @@ func TestCredentialRotationRevocationAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Failure writing audit must roll back both old-key revocation and issuance.
-	if _, err := s.Tasks.db.Exec(`CREATE TRIGGER fail_audit BEFORE INSERT ON credential_audit BEGIN SELECT RAISE(ABORT,'test'); END`); err != nil {
+	if _, err := s.Tasks.db.Exec(failTrigger("fail_audit", "INSERT", "credential_audit", "")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.Rotate(ctx, key.Token); err == nil {
@@ -29,7 +29,7 @@ func TestCredentialRotationRevocationAudit(t *testing.T) {
 	if _, _, ok, err := c.LookupAgentByToken(ctx, key.Token); err != nil || !ok {
 		t.Fatal("failed rotation revoked original key")
 	}
-	if _, err := s.Tasks.db.Exec(`DROP TRIGGER fail_audit`); err != nil {
+	if _, err := s.Tasks.db.Exec(`DROP TRIGGER fail_audit ON credential_audit`); err != nil {
 		t.Fatal(err)
 	}
 	next, err := c.Rotate(ctx, key.Token)

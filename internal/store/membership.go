@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/model"
 )
 
@@ -52,9 +53,9 @@ func visibleScopeArgs(agentID string, withTaskColumn bool) []any {
 	return args
 }
 
-type MembershipStore struct{ db *sql.DB }
+type MembershipStore struct{ db *db.DB }
 
-func NewMembershipStore(db *sql.DB) *MembershipStore { return &MembershipStore{db: db} }
+func NewMembershipStore(d *db.DB) *MembershipStore { return &MembershipStore{db: d} }
 
 const membershipColumns = `project_id, agent_id, status, role, work_role, invited_by, joined_at, scope, expires_at, created_at`
 
@@ -179,7 +180,7 @@ func (s *MembershipStore) SetWorkRole(ctx context.Context, projectID, agentID, w
 // Enroll records an open-project participant without resetting existing roles.
 func (s *MembershipStore) Enroll(ctx context.Context, projectID, agentID string) (model.ProjectMembership, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO project_members (project_id,agent_id,status,created_at,joined_at) VALUES (?,?,'active',?,?)`, projectID, agentID, now, now)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO project_members (project_id,agent_id,status,created_at,joined_at) VALUES (?,?,'active',?,?) ON CONFLICT DO NOTHING`, projectID, agentID, now, now)
 	if err != nil {
 		return model.ProjectMembership{}, err
 	}

@@ -1,6 +1,6 @@
-// Package schema embeds the SQLite DDL. No migration framework yet
-// (5 tables, first milestone) — schema.sql is just re-run at startup with
-// CREATE TABLE IF NOT EXISTS statements.
+// Package schema embeds the PostgreSQL DDL. It is idempotent (IF NOT EXISTS /
+// OR REPLACE) and re-applied on every start; there is no migration framework
+// yet because no deployed database predates this schema.
 package schema
 
 import _ "embed"

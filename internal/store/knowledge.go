@@ -7,13 +7,14 @@ import (
 	"strings"
 	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
 
-type KnowledgeStore struct{ db *sql.DB }
+type KnowledgeStore struct{ db *db.DB }
 
-func NewKnowledgeStore(db *sql.DB) *KnowledgeStore { return &KnowledgeStore{db: db} }
+func NewKnowledgeStore(d *db.DB) *KnowledgeStore { return &KnowledgeStore{db: d} }
 
 const knowledgeColumns = `knowledge_id, schema_version, category, author, content, source, confidence, status, tags, refs, project_id, task_id, supersedes, superseded_by, version, created_at`
 
@@ -36,7 +37,7 @@ func (s *KnowledgeStore) Create(ctx context.Context, author string, req model.Cr
 		// Check mutation rights inside the transaction. Reviewer grants are
 		// read-only and must not authorize replacing an existing record.
 		args := append([]any{*req.Supersedes}, visibleScopeArgs(author, false)...)
-		err := tx.QueryRowContext(ctx, `SELECT version, superseded_by, project_id, task_id FROM knowledge WHERE knowledge_id=? AND `+visibleScopeSQL(""), args...).
+		err := tx.QueryRowContext(ctx, `SELECT version, superseded_by, project_id, task_id FROM knowledge WHERE knowledge_id=? AND `+visibleScopeSQL("")+` FOR UPDATE`, args...).
 			Scan(&prevVersion, &prevSupersededBy, &prevProject, &prevTask)
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Knowledge{}, model.NotFound("knowledge entry not found")
@@ -215,7 +216,7 @@ func (s *KnowledgeStore) Search(ctx context.Context, viewer string, filter model
 		}
 	}
 	if filter.Query != "" {
-		where = append(where, "(content LIKE ? OR tags LIKE ?)")
+		where = append(where, "(content ILIKE ? OR tags ILIKE ?)")
 		like := "%" + filter.Query + "%"
 		args = append(args, like, like)
 	}

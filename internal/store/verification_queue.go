@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
@@ -42,7 +43,7 @@ func (s *TaskStore) claimVerificationAt(ctx context.Context, viewer string, now 
 		AND t.status='SUBMITTED' AND t.submitted_message_id=j.message_id AND t.created_by=? AND t.owner<>?
 		AND (t.project_id IS NULL OR EXISTS (SELECT 1 FROM projects p WHERE p.project_id=t.project_id AND p.status='active'
 		AND (p.visibility='open' OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id=p.project_id AND m.agent_id=? AND m.status='active'))))
-		ORDER BY j.next_at,j.task_id LIMIT 1`, maxVerificationAttempts, stamp, stamp, viewer, viewer, viewer).Scan(&taskID, &messageID, &attempts)
+		ORDER BY j.next_at,j.task_id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`, maxVerificationAttempts, stamp, stamp, viewer, viewer, viewer).Scan(&taskID, &messageID, &attempts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -71,10 +72,10 @@ func (s *TaskStore) claimVerificationAt(ctx context.Context, viewer string, now 
 
 // Finish in the same transaction as the verdict. A late process cannot commit
 // a verdict for a different attempt, even when both processes share an agent ID.
-func finishVerificationJob(ctx context.Context, tx *sql.Tx, taskID string, req model.VerifyRequest, now time.Time) error {
+func finishVerificationJob(ctx context.Context, tx *db.Tx, taskID string, req model.VerifyRequest, now time.Time) error {
 	var attemptID, lease string
 	var attempts int
-	err := tx.QueryRowContext(ctx, `SELECT attempt_id,lease_until,attempts FROM verification_jobs WHERE task_id=?`, taskID).Scan(&attemptID, &lease, &attempts)
+	err := tx.QueryRowContext(ctx, `SELECT attempt_id,lease_until,attempts FROM verification_jobs WHERE task_id=? FOR UPDATE`, taskID).Scan(&attemptID, &lease, &attempts)
 	if errors.Is(err, sql.ErrNoRows) && req.AttemptID == "" {
 		return nil
 	} // legacy/manual record
@@ -89,7 +90,10 @@ func finishVerificationJob(ctx context.Context, tx *sql.Tx, taskID string, req m
 	} else if attemptID != "" && lease > stamp {
 		return model.Conflict("verification is leased; provide its attempt_id or wait for expiry")
 	}
-	done := req.Verdict != "inconclusive"
+	done := 0
+	if req.Verdict != "inconclusive" {
+		done = 1
+	}
 	_, err = tx.ExecContext(ctx, `UPDATE verification_jobs SET done=?, attempt_id='', lease_until='', next_at=? WHERE task_id=?`, done, now.Add(verificationBackoff(attempts)).UTC().Format(time.RFC3339), taskID)
 	return err
 }

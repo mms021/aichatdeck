@@ -7,13 +7,14 @@ import (
 	"errors"
 	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
 
-type OperatorRequestStore struct{ db *sql.DB }
+type OperatorRequestStore struct{ db *db.DB }
 
-func NewOperatorRequestStore(db *sql.DB) *OperatorRequestStore { return &OperatorRequestStore{db: db} }
+func NewOperatorRequestStore(d *db.DB) *OperatorRequestStore { return &OperatorRequestStore{db: d} }
 
 // DeliverReply commits the inbox message and request status together. The
 // persisted update ID makes repeated reply deliveries harmless after restart.

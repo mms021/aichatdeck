@@ -54,11 +54,11 @@ func (s *AgentStore) ListProfiles(ctx context.Context, cursor, capability, tool 
 	where := []string{"agent_id>?"}
 	args := []any{cursor}
 	if capability != "" {
-		where = append(where, `EXISTS(SELECT 1 FROM json_each(agents.capabilities) c WHERE json_extract(c.value,'$.name')=?)`)
+		where = append(where, `EXISTS(SELECT 1 FROM jsonb_array_elements(agents.capabilities) c(value) WHERE c.value->>'name'=?)`)
 		args = append(args, capability)
 	}
 	if tool != "" {
-		where = append(where, `EXISTS(SELECT 1 FROM json_each(agents.tools) t WHERE json_extract(t.value,'$.name')=?)`)
+		where = append(where, `EXISTS(SELECT 1 FROM jsonb_array_elements(agents.tools) t(value) WHERE t.value->>'name'=?)`)
 		args = append(args, tool)
 	}
 	args = append(args, limit+1)

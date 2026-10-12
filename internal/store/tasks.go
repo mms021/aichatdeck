@@ -7,13 +7,14 @@ import (
 	"strings"
 	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
 
-type TaskStore struct{ db *sql.DB }
+type TaskStore struct{ db *db.DB }
 
-func NewTaskStore(db *sql.DB) *TaskStore { return &TaskStore{db: db} }
+func NewTaskStore(d *db.DB) *TaskStore { return &TaskStore{db: d} }
 
 const taskLease = 5 * time.Minute
 
@@ -198,9 +199,9 @@ func (s *TaskStore) List(ctx context.Context, viewer string, filter model.TaskFi
 			continue
 		}
 		column := "tasks." + match.column // fixed column names, never user input
-		where = append(where, `(json_array_length(`+column+`)=0 OR EXISTS (
-			SELECT 1 FROM json_each(`+column+`) AS requirement
-			JOIN json_each(?) AS available ON requirement.value=available.value))`)
+		where = append(where, `(jsonb_array_length(`+column+`)=0 OR EXISTS (
+			SELECT 1 FROM jsonb_array_elements_text(`+column+`) AS requirement(value)
+			JOIN jsonb_array_elements_text(?::jsonb) AS available(value) ON requirement.value=available.value))`)
 		args = append(args, toJSON(match.values))
 	}
 	q := `SELECT ` + taskColumns + ` FROM tasks WHERE ` + strings.Join(where, " AND ")
@@ -294,7 +295,7 @@ func (s *TaskStore) Verify(ctx context.Context, taskID, verifierID string, req m
 
 	var status, createdBy string
 	var submittedMessageID sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT status, created_by, submitted_message_id FROM tasks WHERE task_id=?`, taskID).Scan(&status, &createdBy, &submittedMessageID)
+	err = tx.QueryRowContext(ctx, `SELECT status, created_by, submitted_message_id FROM tasks WHERE task_id=? FOR UPDATE`, taskID).Scan(&status, &createdBy, &submittedMessageID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Task{}, model.Verification{}, model.NotFound("task not found")
 	}

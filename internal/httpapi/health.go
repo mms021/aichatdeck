@@ -8,7 +8,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.DB.PingContext(r.Context()); err != nil {
 		status = "degraded"
-		details["sqlite"] = err.Error()
+		details["postgres"] = err.Error()
 	}
 	if s.RedisPinger != nil {
 		if err := s.RedisPinger.Ping(r.Context()); err != nil {

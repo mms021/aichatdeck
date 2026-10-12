@@ -4,7 +4,6 @@ package httpapi
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"aichatdeck/internal/bus"
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 	"aichatdeck/internal/store"
@@ -34,7 +34,7 @@ type Server struct {
 	Projects              *store.ProjectStore
 	Members               *store.MembershipStore
 	Bus                   bus.Bus
-	DB                    *sql.DB
+	DB                    *db.DB
 	RedisPinger           Pinger
 	Logger                *log.Logger // nil silences server-side logging (tests)
 	OperatorNotifier      OperatorNotifier

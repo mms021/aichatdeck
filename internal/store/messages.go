@@ -8,14 +8,15 @@ import (
 	"strings"
 	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/model"
 )
 
-type MessageStore struct{ db *sql.DB }
+type MessageStore struct{ db *db.DB }
 
-func NewMessageStore(db *sql.DB) *MessageStore { return &MessageStore{db: db} }
+func NewMessageStore(d *db.DB) *MessageStore { return &MessageStore{db: d} }
 
-// seq is assigned by SQLite, so it appears in reads but never in writes.
+// seq is assigned by the database, so it appears in reads but never in writes.
 const (
 	messageInsertColumns = `message_id, protocol_version, type, sender, recipient, ts, conversation_id, task_id, priority, payload, evidence, reply_to, ttl, received_at`
 	messageSelectColumns = `seq, ` + messageInsertColumns
@@ -49,8 +50,8 @@ func (s *MessageStore) Insert(ctx context.Context, env model.Envelope) (model.En
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO messages (`+messageInsertColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		INSERT INTO messages (`+messageInsertColumns+`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (message_id) DO NOTHING`,
 		env.MessageID, env.ProtocolVersion, env.Type, env.Sender, env.Recipient,
 		env.Timestamp.UTC().Format(time.RFC3339), conversationID, taskID, env.Priority,
 		string(env.Payload), toJSON(orEmptySlice(env.Evidence)), replyTo, ttl, now,

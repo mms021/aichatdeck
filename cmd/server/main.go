@@ -6,9 +6,7 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -23,12 +21,9 @@ import (
 func main() {
 	cfg := config.Load()
 
-	if err := os.MkdirAll(filepath.Dir(cfg.SQLitePath), 0o700); err != nil {
-		log.Fatalf("create database dir: %v", err)
-	}
-	sqlDB, err := db.Open(cfg.SQLitePath)
+	sqlDB, err := db.Open(cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
+		log.Fatalf("open database: %v", err)
 	}
 	defer sqlDB.Close()
 
@@ -72,7 +67,7 @@ func main() {
 	go func() { defer close(alertsDone); server.RunVerificationAlerts(ctx) }()
 
 	go func() {
-		log.Printf("aichatdeck listening on %s (sqlite=%s redis=%s)", cfg.Addr, cfg.SQLitePath, cfg.RedisAddr)
+		log.Printf("aichatdeck listening on %s (redis=%s)", cfg.Addr, cfg.RedisAddr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)
 		}

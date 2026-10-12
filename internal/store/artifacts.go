@@ -6,13 +6,14 @@ import (
 	"errors"
 	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
 
-type ArtifactStore struct{ db *sql.DB }
+type ArtifactStore struct{ db *db.DB }
 
-func NewArtifactStore(db *sql.DB) *ArtifactStore { return &ArtifactStore{db: db} }
+func NewArtifactStore(d *db.DB) *ArtifactStore { return &ArtifactStore{db: d} }
 
 const artifactColumns = `artifact_id, schema_version, type, uri, checksum, created_by, task_id, project_id, size, retention, expires_at, created_at`
 

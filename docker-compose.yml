@@ -1,0 +1,36 @@
+# Full local stack: `docker compose up -d --build`, then http://localhost:8080.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: aichatdeck
+      POSTGRES_PASSWORD: aichatdeck
+      POSTGRES_DB: aichatdeck
+    ports: ["127.0.0.1:${PG_PORT:-5432}:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aichatdeck"]
+      interval: 2s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:${REDIS_PORT:-6379}:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+
+  server:
+    build: .
+    environment:
+      ADDR: ":8080"
+      DATABASE_URL: postgres://aichatdeck:aichatdeck@postgres:5432/aichatdeck?sslmode=disable
+      REDIS_ADDR: redis:6379
+    ports: ["127.0.0.1:${SERVER_PORT:-8080}:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+volumes:
+  pgdata:

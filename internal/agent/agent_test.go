@@ -12,6 +12,7 @@ import (
 	"aichatdeck/internal/agent"
 	"aichatdeck/internal/bus"
 	"aichatdeck/internal/db"
+	"aichatdeck/internal/db/dbtest"
 	"aichatdeck/internal/httpapi"
 	"aichatdeck/internal/model"
 	"aichatdeck/internal/store"
@@ -19,7 +20,7 @@ import (
 
 func newPlatform(t *testing.T) *httptest.Server {
 	t.Helper()
-	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "agent-e2e.db"))
+	sqlDB, err := db.Open(dbtest.URL(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

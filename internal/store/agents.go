@@ -6,13 +6,14 @@ import (
 	"errors"
 	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
 
-type AgentStore struct{ db *sql.DB }
+type AgentStore struct{ db *db.DB }
 
-func NewAgentStore(db *sql.DB) *AgentStore { return &AgentStore{db: db} }
+func NewAgentStore(d *db.DB) *AgentStore { return &AgentStore{db: d} }
 
 // buildMetadata folds the RFC-1000 §5 registration fields that have no
 // dedicated top-level slot in the RFC-1800 §3 Agent shape into metadata
