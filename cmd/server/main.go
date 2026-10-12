@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 	"os/signal"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"aichatdeck/internal/config"
 	"aichatdeck/internal/db"
 	"aichatdeck/internal/events"
+	"aichatdeck/internal/grpcapi"
 	"aichatdeck/internal/httpapi"
 	"aichatdeck/internal/metrics"
 	"aichatdeck/internal/notify"
@@ -71,19 +73,23 @@ func main() {
 	alertsDone := make(chan struct{})
 	go func() { defer close(alertsDone); server.RunVerificationAlerts(ctx) }()
 
-	relayDone := make(chan struct{})
+	// The relay always runs: it orders events for gRPC WatchTasks, and
+	// publishes them to Kafka when brokers are configured.
+	relay := &events.Relay{DB: sqlDB, Logger: log.Default(), Notify: func() {
+		_ = redisBus.Publish(context.Background(), grpcapi.EventsChannel)
+	}}
 	if cfg.KafkaBrokers == "" {
-		close(relayDone)
-		log.Println("KAFKA_BROKERS empty: task events stay in the outbox")
+		log.Println("KAFKA_BROKERS empty: events are streamed over gRPC but not exported to Kafka")
 	} else {
 		kafka, err := events.NewKafka(strings.Split(cfg.KafkaBrokers, ","), cfg.KafkaTopic)
 		if err != nil {
 			log.Fatalf("kafka client: %v", err)
 		}
 		defer kafka.Close()
-		relay := &events.Relay{DB: sqlDB, Publisher: kafka, Logger: log.Default()}
-		go func() { defer close(relayDone); relay.Run(ctx) }()
+		relay.Publisher = kafka
 	}
+	relayDone := make(chan struct{})
+	go func() { defer close(relayDone); relay.Run(ctx) }()
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("GET /metrics", metrics.Handler())
@@ -94,8 +100,19 @@ func main() {
 		}
 	}()
 
+	grpcListener, err := net.Listen("tcp", cfg.GRPCAddr)
+	if err != nil {
+		log.Fatalf("listen grpc: %v", err)
+	}
+	grpcServer := grpcapi.New(&grpcapi.Server{App: server.App, AllowAgent: server.AllowAgent, Logger: log.Default()})
 	go func() {
-		log.Printf("aichatdeck listening on %s (redis=%s, kafka=%s, metrics on %s)", cfg.Addr, cfg.RedisAddr, cfg.KafkaBrokers, cfg.MetricsAddr)
+		if err := grpcServer.Serve(grpcListener); err != nil {
+			log.Fatalf("serve grpc: %v", err)
+		}
+	}()
+
+	go func() {
+		log.Printf("aichatdeck listening on %s (grpc %s, metrics %s, redis=%s, kafka=%s)", cfg.Addr, cfg.GRPCAddr, cfg.MetricsAddr, cfg.RedisAddr, cfg.KafkaBrokers)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)
 		}
@@ -109,6 +126,9 @@ func main() {
 		log.Printf("shutdown: %v", err)
 	}
 	_ = metricsServer.Shutdown(shutdownCtx)
+	// WatchTasks streams never end on their own; cut them at the deadline.
+	go func() { <-shutdownCtx.Done(); grpcServer.Stop() }()
+	grpcServer.GracefulStop()
 	<-alertsDone
 	<-relayDone
 }

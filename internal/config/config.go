@@ -6,6 +6,7 @@ import "os"
 type Config struct {
 	Addr                  string // HTTP listen address
 	MetricsAddr           string // Prometheus /metrics listen address; kept off the public API
+	GRPCAddr              string
 	DatabaseURL           string // PostgreSQL connection URL
 	RedisAddr             string
 	KafkaBrokers          string // comma-separated; empty disables the outbox relay
@@ -20,6 +21,7 @@ func Load() Config {
 	return Config{
 		Addr:                  getenv("ADDR", ":47080"),
 		MetricsAddr:           getenv("METRICS_ADDR", ":47090"),
+		GRPCAddr:              getenv("GRPC_ADDR", ":47051"),
 		DatabaseURL:           getenv("DATABASE_URL", "postgres://aichatdeck:aichatdeck@localhost:47432/aichatdeck?sslmode=disable"),
 		RedisAddr:             getenv("REDIS_ADDR", "localhost:47379"),
 		KafkaBrokers:          getenv("KAFKA_BROKERS", "localhost:47092"),

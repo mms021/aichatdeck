@@ -19,7 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"aichatdeck/internal/events"
+	"aichatdeck/internal/model"
 	"aichatdeck/internal/store"
 )
 
@@ -103,7 +103,7 @@ func newAnalytics(reg prometheus.Registerer) *analytics {
 }
 
 func (a *analytics) handle(value []byte, now time.Time) error {
-	var e events.Event
+	var e model.TaskEvent
 	if err := json.Unmarshal(value, &e); err != nil {
 		return err
 	}

@@ -1,4 +1,6 @@
-// Package events moves task events from the PostgreSQL outbox to Kafka.
+// Package events releases task events from the PostgreSQL outbox: it gives
+// each a seq (the order WatchTasks streams) and, when configured, publishes
+// it to Kafka.
 //
 // Delivery is at-least-once: a crash after Kafka acknowledged a batch but
 // before the rows were marked published resends that batch, so consumers
@@ -17,27 +19,20 @@ import (
 
 	"aichatdeck/internal/db"
 	"aichatdeck/internal/metrics"
+	"aichatdeck/internal/model"
 )
-
-// Event is the JSON value of every Kafka record; the record key is TaskID.
-type Event struct {
-	EventID    string          `json:"event_id"`
-	Type       string          `json:"type"`
-	TaskID     string          `json:"task_id"`
-	OccurredAt time.Time       `json:"occurred_at"`
-	Data       json.RawMessage `json:"data"`
-}
 
 // Publisher sends one batch, returning only once every record is durable.
 type Publisher interface {
-	Publish(ctx context.Context, batch []Event) error
+	Publish(ctx context.Context, batch []model.TaskEvent) error
 }
 
 const relayLock = 7461627 // pg advisory lock key; schema application uses 7461626
 
 type Relay struct {
 	DB        *db.DB
-	Publisher Publisher
+	Publisher Publisher     // nil: assign seq only, no Kafka
+	Notify    func()        // called after each released batch, e.g. to wake watchers
 	BatchSize int           // default 100
 	Interval  time.Duration // idle poll interval, default 500ms
 	Logger    *log.Logger
@@ -92,10 +87,10 @@ func (r *Relay) Flush(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	var ids []int64
-	var batch []Event
+	var batch []model.TaskEvent
 	for rows.Next() {
 		var id int64
-		var e Event
+		var e model.TaskEvent
 		var data string
 		if err := rows.Scan(&id, &e.EventID, &e.Type, &e.TaskID, &data, &e.OccurredAt); err != nil {
 			rows.Close()
@@ -109,17 +104,37 @@ func (r *Relay) Flush(ctx context.Context) (int, error) {
 	if err := rows.Err(); err != nil || len(batch) == 0 {
 		return 0, err
 	}
-	if err := r.Publisher.Publish(ctx, batch); err != nil {
-		return 0, fmt.Errorf("publish %d events: %w", len(batch), err)
+	// Reserve a contiguous seq block. Only the lock holder writes seq, and a
+	// failed round just leaves a gap.
+	var base int64
+	if err := tx.QueryRowContext(ctx, `SELECT nextval('outbox_seq')`).Scan(&base); err != nil {
+		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE outbox SET published_at=now() WHERE id = ANY(?)`, ids); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT setval('outbox_seq', ?)`, base+int64(len(batch))-1); err != nil {
+		return 0, err
+	}
+	for i := range batch {
+		batch[i].Seq = base + int64(i)
+	}
+	if r.Publisher != nil {
+		if err := r.Publisher.Publish(ctx, batch); err != nil {
+			return 0, fmt.Errorf("publish %d events: %w", len(batch), err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE outbox o SET published_at=now(), seq=?+u.ord-1
+		FROM unnest(?::bigint[]) WITH ORDINALITY AS u(id, ord) WHERE o.id=u.id`, base, ids); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	for _, e := range batch {
-		metrics.EventsPublished.WithLabelValues(e.Type).Inc()
+	if r.Publisher != nil {
+		for _, e := range batch {
+			metrics.EventsPublished.WithLabelValues(e.Type).Inc()
+		}
+	}
+	if r.Notify != nil {
+		r.Notify()
 	}
 	return len(batch), nil
 }
@@ -154,7 +169,7 @@ func NewKafka(brokers []string, topic string) (*Kafka, error) {
 	return &Kafka{client: client}, nil
 }
 
-func (k *Kafka) Publish(ctx context.Context, batch []Event) error {
+func (k *Kafka) Publish(ctx context.Context, batch []model.TaskEvent) error {
 	records := make([]*kgo.Record, 0, len(batch))
 	for _, e := range batch {
 		value, err := json.Marshal(e)

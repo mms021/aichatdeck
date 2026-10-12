@@ -2,7 +2,7 @@ PG_PORT ?= 47432
 export PG_PORT
 TEST_DATABASE_URL ?= postgres://aichatdeck:aichatdeck@localhost:$(PG_PORT)/aichatdeck?sslmode=disable
 
-.PHONY: up down test lint build
+.PHONY: up down test lint build proto
 
 up:
 	docker compose up -d --build
@@ -21,3 +21,8 @@ lint:
 
 build:
 	CGO_ENABLED=0 go build ./...
+
+# Regenerate gRPC code from proto/ (needs buf, protoc-gen-go, protoc-gen-go-grpc).
+proto:
+	buf lint
+	buf generate

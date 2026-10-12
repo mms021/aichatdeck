@@ -277,6 +277,11 @@ CREATE TABLE IF NOT EXISTS outbox (
   aggregate_id TEXT NOT NULL,
   payload JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  published_at TIMESTAMPTZ
+  published_at TIMESTAMPTZ,
+  -- Release order, set by the (single) relay. Unlike id it never lets a
+  -- later-visible row slot in behind a reader's cursor; WatchTasks pages on it.
+  seq BIGINT UNIQUE
 );
+ALTER TABLE outbox ADD COLUMN IF NOT EXISTS seq BIGINT UNIQUE; -- databases created before seq
+CREATE SEQUENCE IF NOT EXISTS outbox_seq;
 CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox(id) WHERE published_at IS NULL;

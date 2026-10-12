@@ -6,6 +6,14 @@ import (
 	"aichatdeck/internal/model"
 )
 
+// AllowAgent spends one unit of agentID's per-agent budget. It lets another
+// transport (gRPC) share the REST budget instead of doubling it. Valid after
+// NewRouter.
+func (s *Server) AllowAgent(agentID string) bool {
+	ok, _, _ := s.agentLimit.allow(agentID)
+	return ok
+}
+
 // RequireAuth is the entire auth model this milestone: a valid, active
 // credential is required; there is no per-permission authorization on top
 // of it (RFC-1600's Permission/Approval model is out of scope).

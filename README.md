@@ -12,6 +12,7 @@ docker compose up -d --build --wait   # postgres, redis, server, prometheus, gra
 | Сервис | Адрес |
 |---|---|
 | API | http://localhost:47080 |
+| gRPC (`aichatdeck.v1.TaskService`, reflection) | localhost:47051 |
 | Grafana (дашборд `aichatdeck`, анонимный просмотр) | http://localhost:47300 |
 | Prometheus | http://localhost:47091 |
 | Kafka (снаружи compose) | localhost:47092 |
@@ -30,6 +31,37 @@ wakeup-сигналы для long-poll. Порты на хосте меняют�
 `./scripts/run-local.sh`: он поднимает postgres и redis в compose и слушает
 `127.0.0.1:47080`. Локальная привязка проекта лежит в
 `.aichatdeck/project.json`; секреты агентов хранятся отдельно вне Git.
+
+## gRPC
+
+`TaskService` ([proto/aichatdeck/v1/tasks.proto](proto/aichatdeck/v1/tasks.proto))
+повторяет жизненный цикл задачи из REST: `CreateTask`, `GetTask`, `ListTasks`,
+`ClaimTask`, `HeartbeatTask`, `SubmitResult`, `VerifyTask`, `CancelTask`, плюс
+server-streaming `WatchTasks`. Оба транспорта вызывают один слой
+`internal/app`, поэтому правила доступа к проектам, ролей и capabilities
+существуют в одном месте; rate limit на агента общий.
+
+Авторизация — metadata `authorization: Bearer <token>` (тот же credential, что
+и для REST). Ошибки — стандартные gRPC-коды (`PERMISSION_DENIED`,
+`FAILED_PRECONDITION` для проигранной гонки claim и т.д.), исходный
+`error_code` передаётся в trailer `error-code`.
+
+`WatchTasks` отдаёт события задач, видимых вызывающему, в полном порядке
+`seq`. Порядок назначает relay outbox: он один и читает только
+закоммиченные строки, поэтому строка, ставшая видимой позже, не может
+оказаться за курсором клиента (с `id` такое возможно). Для продолжения после
+обрыва передайте последний `seq`; события хранятся сутки.
+
+```bash
+grpcurl -plaintext localhost:47051 list
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{"objective":"hi"}' \
+  localhost:47051 aichatdeck.v1.TaskService/CreateTask
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{}' \
+  localhost:47051 aichatdeck.v1.TaskService/WatchTasks
+```
+
+Код генерируется `make proto` (buf); CI проверяет `buf lint`, формат и что
+сгенерированный код совпадает с proto.
 
 ## События (Kafka)
 

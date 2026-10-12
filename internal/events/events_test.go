@@ -12,11 +12,11 @@ import (
 )
 
 type fakePublisher struct {
-	sent []Event
+	sent []model.TaskEvent
 	err  error
 }
 
-func (f *fakePublisher) Publish(_ context.Context, batch []Event) error {
+func (f *fakePublisher) Publish(_ context.Context, batch []model.TaskEvent) error {
 	if f.err != nil {
 		return f.err
 	}
@@ -68,6 +68,13 @@ func TestFlushPublishesInOrderOnce(t *testing.T) {
 	}
 	if pub.sent[0].EventID == "" || pub.sent[0].EventID == pub.sent[1].EventID || pub.sent[0].OccurredAt.IsZero() {
 		t.Fatalf("events need distinct ids and a timestamp: %+v", pub.sent)
+	}
+	if pub.sent[1].Seq != pub.sent[0].Seq+1 {
+		t.Fatalf("seq must be contiguous in outbox order: %d, %d", pub.sent[0].Seq, pub.sent[1].Seq)
+	}
+	var stored int64
+	if err := d.QueryRow(`SELECT seq FROM outbox WHERE event_id=?`, pub.sent[1].EventID).Scan(&stored); err != nil || stored != pub.sent[1].Seq {
+		t.Fatalf("stored seq %d, published %d: %v", stored, pub.sent[1].Seq, err)
 	}
 	if n, err := r.Flush(context.Background()); n != 0 || err != nil || pending(t, d) != 0 {
 		t.Fatalf("second flush resent: n=%d err=%v", n, err)

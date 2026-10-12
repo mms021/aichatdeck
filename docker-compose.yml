@@ -51,7 +51,9 @@ services:
       DATABASE_URL: postgres://aichatdeck:aichatdeck@postgres:5432/aichatdeck?sslmode=disable
       REDIS_ADDR: redis:6379
       KAFKA_BROKERS: kafka:9092
-    ports: ["127.0.0.1:${SERVER_PORT:-47080}:47080"]
+    ports:
+      - "127.0.0.1:${SERVER_PORT:-47080}:47080"
+      - "127.0.0.1:${GRPC_PORT:-47051}:47051"
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

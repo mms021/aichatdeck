@@ -1,0 +1,214 @@
+syntax = "proto3";
+
+package aichatdeck.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "aichatdeck/internal/gen/aichatdeck/v1;aichatdeckv1";
+
+// TaskService is the gRPC surface of the task lifecycle. It applies the same
+// rules as the REST API (both call internal/app). Every call needs metadata
+// `authorization: Bearer <token>` from POST /agents/register.
+//
+// Errors use standard codes: INVALID_ARGUMENT (validation_error),
+// PERMISSION_DENIED (access_denied), NOT_FOUND, FAILED_PRECONDITION
+// (conflict, e.g. a lost claim race), RESOURCE_EXHAUSTED (rate_limited).
+// The RFC-1000 error_code is also sent as trailer metadata `error-code`.
+service TaskService {
+  rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+  // ClaimTask is the OPEN -> CLAIMED compare-and-swap; it starts a lease.
+  rpc ClaimTask(ClaimTaskRequest) returns (ClaimTaskResponse);
+  rpc HeartbeatTask(HeartbeatTaskRequest) returns (HeartbeatTaskResponse);
+  // SubmitResult reports the claimed task's RESULT to its creator
+  // (CLAIMED -> SUBMITTED). Idempotent on message_id.
+  rpc SubmitResult(SubmitResultRequest) returns (SubmitResultResponse);
+  rpc VerifyTask(VerifyTaskRequest) returns (VerifyTaskResponse);
+  rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
+  // WatchTasks streams lifecycle events of tasks the caller can see, in a
+  // total order (seq). Pass the last seen seq to resume after a disconnect;
+  // events are retained for one day, so resync with ListTasks after longer.
+  rpc WatchTasks(WatchTasksRequest) returns (stream WatchTasksResponse);
+}
+
+enum TaskStatus {
+  TASK_STATUS_UNSPECIFIED = 0;
+  TASK_STATUS_OPEN = 1;
+  TASK_STATUS_CLAIMED = 2;
+  TASK_STATUS_SUBMITTED = 3;
+  TASK_STATUS_COMPLETED = 4;
+  TASK_STATUS_FAILED = 5;
+  TASK_STATUS_CANCELLED = 6;
+}
+
+message Task {
+  string task_id = 1;
+  string objective = 2;
+  google.protobuf.Struct context = 3;
+  repeated string constraints = 4;
+  repeated string required_capabilities = 5;
+  repeated string required_tools = 6;
+  repeated string success_criteria = 7;
+  TaskStatus status = 8;
+  optional string owner = 9;
+  optional string project_id = 10;
+  string created_by = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp deadline = 13;
+  google.protobuf.Timestamp claimed_at = 14;
+  google.protobuf.Timestamp lease_expires_at = 15;
+  // Present only to the current owner's view of a CLAIMED task; required by
+  // HeartbeatTask and SubmitResult.
+  string claim_id = 16;
+  string submitted_message_id = 17;
+  repeated string allowed_work_roles = 18;
+}
+
+message CreateTaskRequest {
+  string objective = 1;
+  google.protobuf.Struct context = 2;
+  repeated string constraints = 3;
+  repeated string required_capabilities = 4;
+  repeated string required_tools = 5;
+  repeated string success_criteria = 6;
+  google.protobuf.Timestamp deadline = 7;
+  optional string project_id = 8;
+  repeated string allowed_work_roles = 9;
+  // Repeating a key returns the task created the first time.
+  string idempotency_key = 10;
+}
+
+message GetTaskRequest {
+  string task_id = 1;
+}
+
+message ListTasksRequest {
+  TaskStatus status = 1;
+  // Unset: all projects. Set to "": tasks outside any project.
+  optional string project_id = 2;
+  repeated string required_capabilities = 3;
+  repeated string required_tools = 4;
+  string cursor = 5;
+}
+
+message ListTasksResponse {
+  repeated Task tasks = 1;
+  string next_cursor = 2;
+}
+
+message ClaimTaskRequest {
+  string task_id = 1;
+}
+
+message HeartbeatTaskRequest {
+  string task_id = 1;
+  string claim_id = 2;
+}
+
+enum ResultStatus {
+  RESULT_STATUS_UNSPECIFIED = 0;
+  RESULT_STATUS_SUCCESS = 1;
+  RESULT_STATUS_PARTIAL = 2;
+  RESULT_STATUS_FAILURE = 3;
+}
+
+message SubmitResultRequest {
+  string task_id = 1;
+  string claim_id = 2;
+  // Client-chosen and unique; retrying with the same id is safe.
+  string message_id = 3;
+  string summary = 4;
+  ResultStatus status = 5;
+  // Artifact IDs registered for this task via POST /artifacts.
+  repeated string artifacts = 6;
+  google.protobuf.Struct metrics = 7;
+}
+
+message SubmitResultResponse {
+  string message_id = 1;
+  // False when message_id was already stored (a retry).
+  bool created = 2;
+}
+
+enum Verdict {
+  VERDICT_UNSPECIFIED = 0;
+  VERDICT_VERIFIED = 1;
+  VERDICT_REJECTED = 2;
+  VERDICT_INCONCLUSIVE = 3;
+}
+
+message VerifyTaskRequest {
+  string task_id = 1;
+  string target_message_id = 2;
+  Verdict verdict = 3;
+  string rationale = 4;
+  repeated string evidence = 5;
+  // From a verification job lease; omit for a manual verdict.
+  string attempt_id = 6;
+}
+
+message Verification {
+  string verification_id = 1;
+  string task_id = 2;
+  string verifier_id = 3;
+  string target_message_id = 4;
+  Verdict verdict = 5;
+  string rationale = 6;
+  repeated string evidence = 7;
+  google.protobuf.Timestamp timestamp = 8;
+}
+
+message VerifyTaskResponse {
+  Task task = 1;
+  Verification verification = 2;
+}
+
+message CancelTaskRequest {
+  string task_id = 1;
+  string reason = 2;
+}
+
+message WatchTasksRequest {
+  // Resume after this seq. Unset: only events from now on.
+  optional int64 after_seq = 1;
+  optional string project_id = 2;
+}
+
+message TaskEvent {
+  int64 seq = 1;
+  string event_id = 2;
+  // task.created, task.claimed, task.submitted, task.verified,
+  // task.cancelled, task.requeued
+  string type = 3;
+  string task_id = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+  TaskStatus status = 6;
+  // Task snapshot after the change, plus verdict/verifier_id for task.verified.
+  google.protobuf.Struct data = 7;
+}
+
+message CreateTaskResponse {
+  Task task = 1;
+}
+
+message GetTaskResponse {
+  Task task = 1;
+}
+
+message ClaimTaskResponse {
+  Task task = 1;
+}
+
+message HeartbeatTaskResponse {
+  Task task = 1;
+}
+
+message CancelTaskResponse {
+  Task task = 1;
+}
+
+message WatchTasksResponse {
+  TaskEvent event = 1;
+}
