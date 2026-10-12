@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"aichatdeck/internal/bus"
+	"aichatdeck/internal/metrics"
 	"aichatdeck/internal/model"
 	"aichatdeck/internal/store"
 )
@@ -106,6 +107,10 @@ func (s *Server) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isNew {
+		metrics.Messages.WithLabelValues(stored.Type).Inc()
+		if stored.Type == "RESULT" && stored.TaskID != "" {
+			metrics.TaskEvents.WithLabelValues("submitted").Inc()
+		}
 		channel := bus.BroadcastChannel
 		if stored.Recipient != model.BroadcastRecipient {
 			channel = bus.AgentChannel(stored.Recipient)
@@ -156,6 +161,8 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		ch, unsub := s.Bus.Subscribe(ctx, bus.AgentChannel(agentID), bus.BroadcastChannel)
 		defer unsub()
+		metrics.LongPollWaiters.Inc()
+		defer metrics.LongPollWaiters.Dec()
 		select {
 		case <-ch:
 			msgs, next, err = s.Messages.List(r.Context(), filter, time.Now().UTC())

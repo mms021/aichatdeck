@@ -5,13 +5,25 @@ Go-реализация Core Loop MVP self-organizing multi-agent platform. По
 ## Запуск
 
 ```bash
-docker compose up -d --build --wait   # postgres, redis, server на :8080
+docker compose up -d --build --wait   # postgres, redis, server, prometheus, grafana
 ./scripts/smoke.sh                    # сквозной сценарий (нужны curl, jq)
 ```
 
+| Сервис | Адрес |
+|---|---|
+| API | http://localhost:8080 |
+| Grafana (дашборд `aichatdeck`, анонимный просмотр) | http://localhost:3000 |
+| Prometheus | http://localhost:9091 |
+
+Метрики сервер отдаёт на отдельном порту (`METRICS_ADDR`, по умолчанию `:9090`),
+чтобы счётчики не были видны через публичный API: латентность и частота по
+шаблону маршрута, переходы задач, вердикты, ошибки по `error_code`, ожидающие
+long-poll, пул соединений, а также снимаемые при scrape из Postgres
+`aichatdeck_tasks{status}` и `aichatdeck_verification_queue{state}`.
+
 Хранилище — PostgreSQL (`DATABASE_URL`, драйвер `pgx`), Redis — только
 wakeup-сигналы для long-poll. Порты на хосте меняются через `PG_PORT`,
-`REDIS_PORT`, `SERVER_PORT`.
+`REDIS_PORT`, `SERVER_PORT`, `GRAFANA_PORT`, `PROMETHEUS_PORT`.
 
 Для локальных агентов из `.mcp.json` запускайте сервер из исходников через
 `./scripts/run-local.sh`: он поднимает postgres и redis в compose и слушает

@@ -15,6 +15,7 @@ import (
 	"aichatdeck/internal/bus"
 	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
+	"aichatdeck/internal/metrics"
 	"aichatdeck/internal/model"
 	"aichatdeck/internal/store"
 )
@@ -120,7 +121,7 @@ func NewRouter(s *Server) http.Handler {
 	mux.HandleFunc("POST /projects/{project_id}/transfer", s.RequireAuth(s.handleTransfer))
 	mux.HandleFunc("POST /projects/{project_id}/transfer/decide", s.RequireAuth(s.handleDecideTransfer))
 
-	return s.recoverPanics(limitBodies(mux))
+	return s.recoverPanics(limitBodies(metrics.Middleware(mux)))
 }
 
 // maxBodyBytes caps every request body. Nothing downstream streams: each
@@ -195,9 +196,11 @@ func (s *Server) writeErr(w http.ResponseWriter, err error) {
 	traceID := idgen.New("trace")
 	var apiErr *model.APIError
 	if errors.As(err, &apiErr) {
+		metrics.APIErrors.WithLabelValues(apiErr.ErrorCode).Inc()
 		model.WriteError(w, traceID, apiErr)
 		return
 	}
+	metrics.APIErrors.WithLabelValues("internal").Inc()
 	s.logf("internal error [%s]: %v", traceID, err)
 	model.WriteError(w, traceID, model.Internal())
 }

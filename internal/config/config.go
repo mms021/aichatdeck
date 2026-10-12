@@ -5,6 +5,7 @@ import "os"
 
 type Config struct {
 	Addr                  string // HTTP listen address
+	MetricsAddr           string // Prometheus /metrics listen address; kept off the public API
 	DatabaseURL           string // PostgreSQL connection URL
 	RedisAddr             string
 	TelegramBotToken      string
@@ -16,6 +17,7 @@ type Config struct {
 func Load() Config {
 	return Config{
 		Addr:                  getenv("ADDR", ":8080"),
+		MetricsAddr:           getenv("METRICS_ADDR", ":9090"),
 		DatabaseURL:           getenv("DATABASE_URL", "postgres://aichatdeck:aichatdeck@localhost:5432/aichatdeck?sslmode=disable"),
 		RedisAddr:             getenv("REDIS_ADDR", "localhost:6379"),
 		TelegramBotToken:      getenv("TELEGRAM_BOT_TOKEN", ""),

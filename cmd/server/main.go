@@ -14,6 +14,7 @@ import (
 	"aichatdeck/internal/config"
 	"aichatdeck/internal/db"
 	"aichatdeck/internal/httpapi"
+	"aichatdeck/internal/metrics"
 	"aichatdeck/internal/notify"
 	"aichatdeck/internal/store"
 )
@@ -26,6 +27,8 @@ func main() {
 		log.Fatalf("open database: %v", err)
 	}
 	defer sqlDB.Close()
+
+	metrics.RegisterDB(sqlDB.DB)
 
 	redisBus := bus.NewRedis(cfg.RedisAddr)
 	defer redisBus.Close()
@@ -66,8 +69,17 @@ func main() {
 	alertsDone := make(chan struct{})
 	go func() { defer close(alertsDone); server.RunVerificationAlerts(ctx) }()
 
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("GET /metrics", metrics.Handler())
+	metricsServer := &http.Server{Addr: cfg.MetricsAddr, Handler: metricsMux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
-		log.Printf("aichatdeck listening on %s (redis=%s)", cfg.Addr, cfg.RedisAddr)
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("serve metrics: %v", err)
+		}
+	}()
+
+	go func() {
+		log.Printf("aichatdeck listening on %s (redis=%s, metrics on %s)", cfg.Addr, cfg.RedisAddr, cfg.MetricsAddr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)
 		}
@@ -80,5 +92,6 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+	_ = metricsServer.Shutdown(shutdownCtx)
 	<-alertsDone
 }

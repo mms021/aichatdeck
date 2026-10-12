@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"aichatdeck/internal/metrics"
 	"aichatdeck/internal/model"
 )
 
@@ -40,6 +41,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, err)
 		return
 	}
+	metrics.TaskEvents.WithLabelValues("created").Inc()
 	writeJSON(w, http.StatusCreated, task)
 }
 
@@ -155,6 +157,7 @@ func (s *Server) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, err)
 		return
 	}
+	metrics.TaskEvents.WithLabelValues("claimed").Inc()
 	writeJSON(w, http.StatusOK, task)
 }
 
@@ -280,6 +283,7 @@ func (s *Server) handleVerifyTask(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, err)
 		return
 	}
+	metrics.Verdicts.WithLabelValues(verification.Verdict).Inc()
 	writeJSON(w, http.StatusOK, model.VerifyResponse{Task: task, Verification: verification})
 }
 

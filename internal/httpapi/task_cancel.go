@@ -1,6 +1,10 @@
 package httpapi
 
-import "net/http"
+import (
+	"net/http"
+
+	"aichatdeck/internal/metrics"
+)
 
 func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 	actor, _ := AgentIDFromContext(r.Context())
@@ -27,5 +31,6 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, err)
 		return
 	}
+	metrics.TaskEvents.WithLabelValues("cancelled").Inc()
 	writeJSON(w, http.StatusOK, task)
 }
