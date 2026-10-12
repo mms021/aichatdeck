@@ -42,5 +42,13 @@ jobs:
       - run: ./scripts/smoke.sh
       - name: metrics exported
         run: docker compose exec -T prometheus wget -qO- http://server:47090/metrics | grep -q 'aichatdeck_task_events_total{event="submitted"} 1'
+      - name: events reach the Kafka consumer
+        run: |
+          for i in $(seq 1 30); do
+            docker compose exec -T prometheus wget -qO- http://analytics:47093/metrics \
+              | grep -q 'aichatdeck_analytics_events_total{type="task.verified"} 1' && exit 0
+            sleep 2
+          done
+          exit 1
       - if: failure()
         run: docker compose logs

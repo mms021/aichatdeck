@@ -264,3 +264,19 @@ CREATE TABLE IF NOT EXISTS verification_retries (
   task_id TEXT NOT NULL REFERENCES tasks(task_id),
   created_at TIMESTAMPTZ NOT NULL
 );
+
+-- Transactional outbox for task events. A row is written by the same
+-- statement or transaction as the change it describes, so an event exists
+-- exactly when the change committed. internal/events relays rows to Kafka.
+-- Per-task order holds: every writer locks the task row first, so a later
+-- event for a task always gets a larger id and commits after the earlier one.
+CREATE TABLE IF NOT EXISTS outbox (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  event_id UUID NOT NULL DEFAULT gen_random_uuid(),
+  event_type TEXT NOT NULL,
+  aggregate_id TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox(id) WHERE published_at IS NULL;

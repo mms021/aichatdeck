@@ -45,6 +45,12 @@ var (
 	APIErrors = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: ns, Name: "api_errors_total", Help: "Error responses by RFC-1000 error_code.",
 	}, []string{"code"})
+	EventsPublished = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns, Name: "events_published_total", Help: "Outbox events acknowledged by Kafka.",
+	}, []string{"type"})
+	OutboxPublishErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: ns, Name: "outbox_publish_errors_total", Help: "Failed outbox relay rounds; events stay queued.",
+	})
 	LongPollWaiters = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: ns, Name: "longpoll_waiters", Help: "GET /messages requests currently waiting for a wakeup.",
 	})
@@ -88,8 +94,10 @@ func RegisterDB(db *sql.DB) {
 func Handler() http.Handler { return promhttp.Handler() }
 
 var (
-	tasksDesc = prometheus.NewDesc(ns+"_tasks", "Tasks by current status.", []string{"status"}, nil)
-	queueDesc = prometheus.NewDesc(ns+"_verification_queue", "Unfinished verification jobs: due, leased, waiting (backoff) or exhausted.", []string{"state"}, nil)
+	tasksDesc         = prometheus.NewDesc(ns+"_tasks", "Tasks by current status.", []string{"status"}, nil)
+	outboxPendingDesc = prometheus.NewDesc(ns+"_outbox_pending", "Task events not yet acknowledged by Kafka.", nil, nil)
+	outboxAgeDesc     = prometheus.NewDesc(ns+"_outbox_oldest_pending_seconds", "Age of the oldest unpublished event (relay lag).", nil, nil)
+	queueDesc         = prometheus.NewDesc(ns+"_verification_queue", "Unfinished verification jobs: due, leased, waiting (backoff) or exhausted.", []string{"state"}, nil)
 )
 
 type stateCollector struct{ db *sql.DB }
@@ -97,6 +105,8 @@ type stateCollector struct{ db *sql.DB }
 func (c *stateCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- tasksDesc
 	ch <- queueDesc
+	ch <- outboxPendingDesc
+	ch <- outboxAgeDesc
 }
 
 func (c *stateCollector) Collect(ch chan<- prometheus.Metric) {
@@ -110,6 +120,14 @@ func (c *stateCollector) Collect(ch chan<- prometheus.Metric) {
 			WHEN next_at <= now() THEN 'due'
 			ELSE 'waiting' END AS state, count(*)
 		FROM verification_jobs WHERE done = 0 GROUP BY 1`)
+	var pending, age float64
+	if err := c.db.QueryRowContext(ctx, `SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now() - min(created_at)), 0)
+		FROM outbox WHERE published_at IS NULL`).Scan(&pending, &age); err != nil {
+		ch <- prometheus.NewInvalidMetric(outboxPendingDesc, err)
+		return
+	}
+	ch <- prometheus.MustNewConstMetric(outboxPendingDesc, prometheus.GaugeValue, pending)
+	ch <- prometheus.MustNewConstMetric(outboxAgeDesc, prometheus.GaugeValue, age)
 }
 
 func (c *stateCollector) collect(ctx context.Context, ch chan<- prometheus.Metric, desc *prometheus.Desc, query string) {

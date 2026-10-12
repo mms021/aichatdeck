@@ -24,8 +24,8 @@ func (s *TaskStore) CancelOpen(ctx context.Context, actor, taskID, reason string
 	if task.Status == model.TaskCancelled {
 		return task, nil
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, context=jsonb_set(context, '{cancellation}', ?::jsonb)
-		WHERE task_id=? AND created_by=? AND status=? AND owner IS NULL`, model.TaskCancelled,
+	res, err := s.db.ExecContext(ctx, withTaskEvent(EventTaskCancelled, `UPDATE tasks SET status=?, context=jsonb_set(context, '{cancellation}', ?::jsonb)
+		WHERE task_id=? AND created_by=? AND status=? AND owner IS NULL`), model.TaskCancelled,
 		toJSON(map[string]string{"reason": reason, "cancelled_by": actor, "cancelled_at": time.Now().UTC().Format(time.RFC3339)}),
 		taskID, actor, model.TaskOpen)
 	if err != nil {

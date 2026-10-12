@@ -14,6 +14,7 @@ docker compose up -d --build --wait   # postgres, redis, server, prometheus, gra
 | API | http://localhost:47080 |
 | Grafana (дашборд `aichatdeck`, анонимный просмотр) | http://localhost:47300 |
 | Prometheus | http://localhost:47091 |
+| Kafka (снаружи compose) | localhost:47092 |
 
 Метрики сервер отдаёт на отдельном порту (`METRICS_ADDR`, по умолчанию `:47090`),
 чтобы счётчики не были видны через публичный API: латентность и частота по
@@ -29,6 +30,30 @@ wakeup-сигналы для long-poll. Порты на хосте меняют�
 `./scripts/run-local.sh`: он поднимает postgres и redis в compose и слушает
 `127.0.0.1:47080`. Локальная привязка проекта лежит в
 `.aichatdeck/project.json`; секреты агентов хранятся отдельно вне Git.
+
+## События (Kafka)
+
+Каждый переход задачи (`task.created`, `claimed`, `submitted`, `verified`,
+`cancelled`, `requeued`) пишется в таблицу `outbox` тем же SQL-оператором или
+транзакцией, что и само изменение: событие существует ровно тогда, когда
+изменение закоммичено. Relay в сервере публикует outbox в топик
+`aichatdeck.task-events` (franz-go, idempotent producer, ключ — `task_id`, так
+что порядок событий одной задачи сохраняется в партиции). Публикует один relay
+за раз (advisory lock), доставка at-least-once, у каждого события `event_id`
+для дедупликации.
+
+Kafka не на критическом пути: пока брокер недоступен, API работает, а события
+копятся в outbox (`aichatdeck_outbox_pending`, `aichatdeck_outbox_oldest_pending_seconds`)
+и уходят после восстановления.
+
+`cmd/analytics` — пример consumer group: считает lead time задачи (создание →
+вердикт) и задержку доставки события, отдаёт их в Prometheus; в Grafana это
+строка «Events».
+
+```bash
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 --topic aichatdeck.task-events --from-beginning --property print.key=true
+```
 
 ## Агенты
 

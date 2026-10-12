@@ -7,12 +7,14 @@ import (
 	"log"
 	"net/http"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"aichatdeck/internal/bus"
 	"aichatdeck/internal/config"
 	"aichatdeck/internal/db"
+	"aichatdeck/internal/events"
 	"aichatdeck/internal/httpapi"
 	"aichatdeck/internal/metrics"
 	"aichatdeck/internal/notify"
@@ -69,6 +71,20 @@ func main() {
 	alertsDone := make(chan struct{})
 	go func() { defer close(alertsDone); server.RunVerificationAlerts(ctx) }()
 
+	relayDone := make(chan struct{})
+	if cfg.KafkaBrokers == "" {
+		close(relayDone)
+		log.Println("KAFKA_BROKERS empty: task events stay in the outbox")
+	} else {
+		kafka, err := events.NewKafka(strings.Split(cfg.KafkaBrokers, ","), cfg.KafkaTopic)
+		if err != nil {
+			log.Fatalf("kafka client: %v", err)
+		}
+		defer kafka.Close()
+		relay := &events.Relay{DB: sqlDB, Publisher: kafka, Logger: log.Default()}
+		go func() { defer close(relayDone); relay.Run(ctx) }()
+	}
+
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("GET /metrics", metrics.Handler())
 	metricsServer := &http.Server{Addr: cfg.MetricsAddr, Handler: metricsMux, ReadHeaderTimeout: 5 * time.Second}
@@ -79,7 +95,7 @@ func main() {
 	}()
 
 	go func() {
-		log.Printf("aichatdeck listening on %s (redis=%s, metrics on %s)", cfg.Addr, cfg.RedisAddr, cfg.MetricsAddr)
+		log.Printf("aichatdeck listening on %s (redis=%s, kafka=%s, metrics on %s)", cfg.Addr, cfg.RedisAddr, cfg.KafkaBrokers, cfg.MetricsAddr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)
 		}
@@ -94,4 +110,5 @@ func main() {
 	}
 	_ = metricsServer.Shutdown(shutdownCtx)
 	<-alertsDone
+	<-relayDone
 }

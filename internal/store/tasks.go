@@ -25,8 +25,8 @@ func (s *TaskStore) RequeueExpired(ctx context.Context) error {
 }
 
 func (s *TaskStore) requeueExpiredAt(ctx context.Context, now time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, owner=NULL, claimed_at=NULL, lease_expires_at=NULL, claim_id=NULL, submitted_message_id=NULL
-		WHERE status=? AND (claim_id IS NULL OR (lease_expires_at IS NOT NULL AND lease_expires_at <= ?))`,
+	_, err := s.db.ExecContext(ctx, withTaskEvent(EventTaskRequeued, `UPDATE tasks SET status=?, owner=NULL, claimed_at=NULL, lease_expires_at=NULL, claim_id=NULL, submitted_message_id=NULL
+		WHERE status=? AND (claim_id IS NULL OR (lease_expires_at IS NOT NULL AND lease_expires_at <= ?))`),
 		model.TaskOpen, model.TaskClaimed, now.UTC())
 	return err
 }
@@ -61,9 +61,9 @@ func (s *TaskStore) Create(ctx context.Context, createdBy string, req model.Crea
 		deadline = req.Deadline.UTC()
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.db.ExecContext(ctx, withTaskEvent(EventTaskCreated, `
 		INSERT INTO tasks (task_id, schema_version, objective, context, constraints, required_capabilities, required_tools, success_criteria, status, owner, team_id, project_id, created_by, idempotency_key, created_at, deadline, allowed_work_roles)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
 		taskID, "1.0", req.Objective, toJSON(orEmptyMap(req.Context)), toJSON(orEmptySlice(req.Constraints)),
 		toJSON(orEmptySlice(req.RequiredCapabilities)), toJSON(orEmptySlice(req.RequiredTools)), toJSON(orEmptySlice(req.SuccessCriteria)),
 		model.TaskOpen, nil, nil, nullableString(req.ProjectID), createdBy, nullIfEmpty(idempotencyKey), now, deadline, toJSON(orEmptySlice(req.AllowedWorkRoles)),
@@ -248,7 +248,7 @@ func (s *TaskStore) Claim(ctx context.Context, taskID, agentID string) (model.Ta
 		return model.Task{}, err
 	}
 	now := dbNow()
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, owner=?, claimed_at=?, lease_expires_at=?, claim_id=?, submitted_message_id=NULL WHERE task_id=? AND status=?`,
+	res, err := s.db.ExecContext(ctx, withTaskEvent(EventTaskClaimed, `UPDATE tasks SET status=?, owner=?, claimed_at=?, lease_expires_at=?, claim_id=?, submitted_message_id=NULL WHERE task_id=? AND status=?`),
 		model.TaskClaimed, agentID, now, now.Add(taskLease), idgen.New("claim"), taskID, model.TaskOpen)
 	if err != nil {
 		return model.Task{}, err
@@ -343,6 +343,13 @@ func (s *TaskStore) Verify(ctx context.Context, taskID, verifierID string, req m
 		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET status=? WHERE task_id=?`, newStatus, taskID); err != nil {
 			return model.Task{}, model.Verification{}, err
 		}
+	}
+	// Every verdict is an event, inconclusive included: it is the signal that
+	// verification will be retried.
+	if _, err := tx.ExecContext(ctx, `INSERT INTO outbox (event_type, aggregate_id, payload)
+		SELECT ?, task_id, `+taskSnapshot+` || jsonb_build_object('verdict', ?::text, 'verifier_id', ?::text)
+		FROM tasks WHERE task_id=?`, EventTaskVerified, req.Verdict, verifierID, taskID); err != nil {
+		return model.Task{}, model.Verification{}, err
 	}
 
 	if err := tx.Commit(); err != nil {

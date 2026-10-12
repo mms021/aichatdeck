@@ -73,8 +73,8 @@ func (s *MessageStore) Insert(ctx context.Context, env model.Envelope) (model.En
 		if json.Unmarshal(env.Payload, &payload) != nil || payload.ClaimID == "" {
 			return model.Envelope{}, false, model.ValidationError("task RESULT requires payload.claim_id")
 		}
-		res, err := tx.ExecContext(ctx, `UPDATE tasks SET status=?, submitted_message_id=?, lease_expires_at=NULL
-			WHERE task_id=? AND status=? AND owner=? AND created_by=? AND claim_id=? AND lease_expires_at>?`,
+		res, err := tx.ExecContext(ctx, withTaskEvent(EventTaskSubmitted, `UPDATE tasks SET status=?, submitted_message_id=?, lease_expires_at=NULL
+			WHERE task_id=? AND status=? AND owner=? AND created_by=? AND claim_id=? AND lease_expires_at>?`),
 			model.TaskSubmitted, env.MessageID, env.TaskID, model.TaskClaimed, env.Sender, env.Recipient, payload.ClaimID, dbNow())
 		if err != nil {
 			return model.Envelope{}, false, err

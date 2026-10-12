@@ -8,6 +8,8 @@ type Config struct {
 	MetricsAddr           string // Prometheus /metrics listen address; kept off the public API
 	DatabaseURL           string // PostgreSQL connection URL
 	RedisAddr             string
+	KafkaBrokers          string // comma-separated; empty disables the outbox relay
+	KafkaTopic            string
 	TelegramBotToken      string
 	TelegramChatID        string
 	TelegramUserID        string
@@ -20,6 +22,8 @@ func Load() Config {
 		MetricsAddr:           getenv("METRICS_ADDR", ":47090"),
 		DatabaseURL:           getenv("DATABASE_URL", "postgres://aichatdeck:aichatdeck@localhost:47432/aichatdeck?sslmode=disable"),
 		RedisAddr:             getenv("REDIS_ADDR", "localhost:47379"),
+		KafkaBrokers:          getenv("KAFKA_BROKERS", "localhost:47092"),
+		KafkaTopic:            getenv("KAFKA_TOPIC", "aichatdeck.task-events"),
 		TelegramBotToken:      getenv("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:        getenv("TELEGRAM_CHAT_ID", ""),
 		TelegramUserID:        getenv("TELEGRAM_USER_ID", ""),
