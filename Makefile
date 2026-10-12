@@ -1,4 +1,4 @@
-PG_PORT ?= 5432
+PG_PORT ?= 47432
 export PG_PORT
 TEST_DATABASE_URL ?= postgres://aichatdeck:aichatdeck@localhost:$(PG_PORT)/aichatdeck?sslmode=disable
 

@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	base := flag.String("base", "http://127.0.0.1:8080", "platform base URL")
+	base := flag.String("base", "http://127.0.0.1:47080", "platform base URL")
 	statePath := flag.String("state", "", "owner-only state file (required)")
 	capsFlag := flag.String("caps", "", "comma-separated real capabilities (required)")
 	toolsFlag := flag.String("tools", "", "comma-separated real local tool names")

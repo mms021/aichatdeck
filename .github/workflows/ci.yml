@@ -41,6 +41,6 @@ jobs:
       - run: docker compose up -d --build --wait
       - run: ./scripts/smoke.sh
       - name: metrics exported
-        run: docker compose exec -T prometheus wget -qO- http://server:9090/metrics | grep -q 'aichatdeck_task_events_total{event="submitted"} 1'
+        run: docker compose exec -T prometheus wget -qO- http://server:47090/metrics | grep -q 'aichatdeck_task_events_total{event="submitted"} 1'
       - if: failure()
         run: docker compose logs

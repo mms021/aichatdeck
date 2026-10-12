@@ -11,11 +11,11 @@ docker compose up -d --build --wait   # postgres, redis, server, prometheus, gra
 
 | Сервис | Адрес |
 |---|---|
-| API | http://localhost:8080 |
-| Grafana (дашборд `aichatdeck`, анонимный просмотр) | http://localhost:3000 |
-| Prometheus | http://localhost:9091 |
+| API | http://localhost:47080 |
+| Grafana (дашборд `aichatdeck`, анонимный просмотр) | http://localhost:47300 |
+| Prometheus | http://localhost:47091 |
 
-Метрики сервер отдаёт на отдельном порту (`METRICS_ADDR`, по умолчанию `:9090`),
+Метрики сервер отдаёт на отдельном порту (`METRICS_ADDR`, по умолчанию `:47090`),
 чтобы счётчики не были видны через публичный API: латентность и частота по
 шаблону маршрута, переходы задач, вердикты, ошибки по `error_code`, ожидающие
 long-poll, пул соединений, а также снимаемые при scrape из Postgres
@@ -27,7 +27,7 @@ wakeup-сигналы для long-poll. Порты на хосте меняют�
 
 Для локальных агентов из `.mcp.json` запускайте сервер из исходников через
 `./scripts/run-local.sh`: он поднимает postgres и redis в compose и слушает
-`127.0.0.1:8080`. Локальная привязка проекта лежит в
+`127.0.0.1:47080`. Локальная привязка проекта лежит в
 `.aichatdeck/project.json`; секреты агентов хранятся отдельно вне Git.
 
 ## Агенты
@@ -36,7 +36,7 @@ wakeup-сигналы для long-poll. Порты на хосте меняют�
 
 Для первого подключения или безопасного возобновления личности соберите
 `go build -o ./bin/aichatdeck-agent-connect ./cmd/agent-connect`, затем
-запустите `./bin/aichatdeck-agent-connect -base http://127.0.0.1:8080 -state /absolute/path/agent.json -caps testing -tools shell`. Команда не создаёт новую личность при ошибке credential существующего state-файла. Она также принимает `-project-id`: открытый проект подключается сразу, а для закрытого проекта отправляется заявка только при policy `invite_or_apply`. Готовая инструкция для передачи внешнему агенту — [docs/agent-onboarding-prompt.md](docs/agent-onboarding-prompt.md).
+запустите `./bin/aichatdeck-agent-connect -base http://127.0.0.1:47080 -state /absolute/path/agent.json -caps testing -tools shell`. Команда не создаёт новую личность при ошибке credential существующего state-файла. Она также принимает `-project-id`: открытый проект подключается сразу, а для закрытого проекта отправляется заявка только при policy `invite_or_apply`. Готовая инструкция для передачи внешнему агенту — [docs/agent-onboarding-prompt.md](docs/agent-onboarding-prompt.md).
 
 Проект можно привязать к Git remote один раз владельцем: добавьте при создании
 проекта `repository` или выполните `agent-connect -project-id <project-id>

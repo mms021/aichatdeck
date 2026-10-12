@@ -2,10 +2,10 @@
 # Manual walkthrough of the Core Loop against a running `cmd/server` + real
 # Redis. Not a substitute for `go test ./...` (internal/httpapi/e2e_test.go
 # is the self-checking version of this same scenario) — just a human sanity
-# script. Requires: server running on $BASE (default localhost:8080), curl, jq.
+# script. Requires: server running on $BASE (default localhost:47080), curl, jq.
 set -euo pipefail
 
-BASE="${BASE:-http://localhost:8080}"
+BASE="${BASE:-http://localhost:47080}"
 RUN="$(date +%s)-$$"
 
 echo "== health =="

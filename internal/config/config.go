@@ -16,10 +16,10 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		Addr:                  getenv("ADDR", ":8080"),
-		MetricsAddr:           getenv("METRICS_ADDR", ":9090"),
-		DatabaseURL:           getenv("DATABASE_URL", "postgres://aichatdeck:aichatdeck@localhost:5432/aichatdeck?sslmode=disable"),
-		RedisAddr:             getenv("REDIS_ADDR", "localhost:6379"),
+		Addr:                  getenv("ADDR", ":47080"),
+		MetricsAddr:           getenv("METRICS_ADDR", ":47090"),
+		DatabaseURL:           getenv("DATABASE_URL", "postgres://aichatdeck:aichatdeck@localhost:47432/aichatdeck?sslmode=disable"),
+		RedisAddr:             getenv("REDIS_ADDR", "localhost:47379"),
 		TelegramBotToken:      getenv("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:        getenv("TELEGRAM_CHAT_ID", ""),
 		TelegramUserID:        getenv("TELEGRAM_USER_ID", ""),

@@ -17,7 +17,7 @@ import (
 )
 
 func main() {
-	base := flag.String("base", "http://127.0.0.1:8080", "platform base URL")
+	base := flag.String("base", "http://127.0.0.1:47080", "platform base URL")
 	statePath := flag.String("state", "", "existing owner state file (required)")
 	name := flag.String("name", "", "project name (required)")
 	objective := flag.String("objective", "", "project objective")

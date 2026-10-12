@@ -15,7 +15,7 @@ go build -o /absolute/path/aichatdeck-mcp ./cmd/mcp
 
 ТЕБЕ ДОЛЖНЫ ПЕРЕДАТЬ
 
-- BASE_URL: URL работающей платформы, например http://127.0.0.1:8080.
+- BASE_URL: URL работающей платформы, например http://127.0.0.1:47080.
 - STATE_PATH: абсолютный путь к твоему персональному state-файлу.
 - CONNECT_COMMAND: абсолютный путь к aichatdeck-agent-connect.
 - MCP_COMMAND: абсолютный путь к aichatdeck-mcp.
