@@ -15,7 +15,7 @@ const exhaustedVerification = `j.done=0 AND j.attempts>=5 AND j.lease_until<=?
  AND t.status='SUBMITTED' AND t.submitted_message_id=j.message_id`
 
 func (s *TaskStore) ExhaustedVerifications(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT j.task_id FROM verification_jobs j JOIN tasks t ON t.task_id=j.task_id WHERE `+exhaustedVerification+` ORDER BY j.task_id LIMIT 10`, time.Now().UTC().Format(time.RFC3339))
+	rows, err := s.db.QueryContext(ctx, `SELECT j.task_id FROM verification_jobs j JOIN tasks t ON t.task_id=j.task_id WHERE `+exhaustedVerification+` ORDER BY j.task_id LIMIT 10`, dbNow())
 	if err != nil {
 		return nil, err
 	}
@@ -50,8 +50,8 @@ func (s *TaskStore) RetryVerification(ctx context.Context, updateID int64, taskI
 	if !errors.Is(err, sql.ErrNoRows) {
 		return false, err
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := tx.ExecContext(ctx, `UPDATE verification_jobs SET attempts=0,next_at=?,attempt_id='',lease_until=''
+	now := dbNow()
+	res, err := tx.ExecContext(ctx, `UPDATE verification_jobs SET attempts=0,next_at=?,attempt_id='',lease_until='-infinity'
  WHERE task_id IN (SELECT j.task_id FROM verification_jobs j JOIN tasks t ON t.task_id=j.task_id WHERE `+exhaustedVerification+` AND j.task_id=?)`, now, now, taskID)
 	if err != nil {
 		return false, err
@@ -62,7 +62,7 @@ func (s *TaskStore) RetryVerification(ctx context.Context, updateID int64, taskI
 	if _, err = tx.ExecContext(ctx, `INSERT INTO verification_retries(update_id,task_id,created_at) VALUES(?,?,?)`, updateID, taskID, now); err != nil {
 		return false, err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE verification_alerts SET sent=0,lease_until='',token='' WHERE task_id=?`, taskID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE verification_alerts SET sent=0,lease_until='-infinity',token='' WHERE task_id=?`, taskID); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()
@@ -74,8 +74,8 @@ func (s *TaskStore) ClaimVerificationAlert(ctx context.Context) (taskID, token s
 		return "", "", err
 	}
 	defer tx.Rollback()
-	now := time.Now().UTC()
-	stamp := now.Format(time.RFC3339)
+	now := dbNow()
+	stamp := now
 	_, err = tx.ExecContext(ctx, `INSERT INTO verification_alerts(task_id) SELECT j.task_id FROM verification_jobs j JOIN tasks t ON t.task_id=j.task_id WHERE `+exhaustedVerification+` ON CONFLICT DO NOTHING`, stamp)
 	if err != nil {
 		return "", "", err
@@ -88,7 +88,7 @@ func (s *TaskStore) ClaimVerificationAlert(ctx context.Context) (taskID, token s
 		return "", "", err
 	}
 	token = idgen.New("alert")
-	_, err = tx.ExecContext(ctx, `UPDATE verification_alerts SET token=?,lease_until=? WHERE task_id=?`, token, now.Add(2*time.Minute).Format(time.RFC3339), taskID)
+	_, err = tx.ExecContext(ctx, `UPDATE verification_alerts SET token=?,lease_until=? WHERE task_id=?`, token, now.Add(2*time.Minute), taskID)
 	if err != nil {
 		return "", "", err
 	}
@@ -96,6 +96,6 @@ func (s *TaskStore) ClaimVerificationAlert(ctx context.Context) (taskID, token s
 }
 
 func (s *TaskStore) MarkVerificationAlertSent(ctx context.Context, taskID, token string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE verification_alerts SET sent=1,token='',lease_until='' WHERE task_id=? AND token=?`, taskID, token)
+	_, err := s.db.ExecContext(ctx, `UPDATE verification_alerts SET sent=1,token='',lease_until='-infinity' WHERE task_id=? AND token=?`, taskID, token)
 	return err
 }

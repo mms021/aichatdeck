@@ -17,7 +17,7 @@ func (s *AgentStore) UpdateAvailability(ctx context.Context, id string, req mode
 		return model.AgentProfile{}, err
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO agent_availability(agent_id,payload,updated_at) VALUES(?,?,?)
- ON CONFLICT(agent_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at`, id, toJSON(req), time.Now().UTC().Format(time.RFC3339))
+ ON CONFLICT(agent_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at`, id, toJSON(req), dbNow())
 	if err != nil {
 		return model.AgentProfile{}, err
 	}
@@ -30,15 +30,12 @@ func (s *AgentStore) Profile(ctx context.Context, id string) (model.AgentProfile
 		return model.AgentProfile{}, err
 	}
 	out := model.AgentProfile{AgentID: a.AgentID, Capabilities: a.Capabilities, Tools: a.Tools}
-	var payload, stamp string
-	err = s.db.QueryRowContext(ctx, `SELECT payload,updated_at FROM agent_availability WHERE agent_id=?`, id).Scan(&payload, &stamp)
+	var payload string
+	var updated time.Time
+	err = s.db.QueryRowContext(ctx, `SELECT payload,updated_at FROM agent_availability WHERE agent_id=?`, id).Scan(&payload, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, nil
 	}
-	if err != nil {
-		return out, err
-	}
-	updated, err := time.Parse(time.RFC3339, stamp)
 	if err != nil {
 		return out, err
 	}

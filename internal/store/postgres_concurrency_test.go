@@ -10,10 +10,8 @@ import (
 	"aichatdeck/internal/model"
 )
 
-// race runs fn from n goroutines released at once and counts successes. The
-// pool is filled first: otherwise the goroutine that gets the one idle
-// connection finishes before the others have even dialed, and nothing races.
-func race(t *testing.T, d *db.DB, n int, fn func() bool) int {
+// warmPool opens n idle connections up front.
+func warmPool(t *testing.T, d *db.DB, n int) {
 	d.SetMaxIdleConns(n)
 	conns := make([]*sql.Conn, n)
 	for i := range conns {
@@ -26,6 +24,13 @@ func race(t *testing.T, d *db.DB, n int, fn func() bool) int {
 	for _, c := range conns {
 		c.Close()
 	}
+}
+
+// race runs fn from n goroutines released at once and counts successes. The
+// pool is filled first: otherwise the goroutine that gets the one idle
+// connection finishes before the others have even dialed, and nothing races.
+func race(t *testing.T, d *db.DB, n int, fn func() bool) int {
+	warmPool(t, d, n)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	start := make(chan struct{})

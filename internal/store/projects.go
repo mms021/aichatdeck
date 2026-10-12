@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
 	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
@@ -19,7 +18,7 @@ const projectColumns = `project_id, schema_version, name, objective, visibility,
 
 func (s *ProjectStore) Create(ctx context.Context, owner string, req model.CreateProjectRequest) (model.Project, error) {
 	id := idgen.New("project")
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 
 	visibility := req.Visibility
 	if visibility == "" {
@@ -80,10 +79,10 @@ func (s *ProjectStore) Create(ctx context.Context, owner string, req model.Creat
 func scanProject(row interface{ Scan(...any) error }) (model.Project, error) {
 	var p model.Project
 	var listed int
-	var metadataJSON, createdAtStr string
+	var metadataJSON string
 	var pendingOwner sql.NullString
 	err := row.Scan(&p.ProjectID, &p.SchemaVersion, &p.Name, &p.Objective, &p.Visibility,
-		&listed, &p.MembershipPolicy, &p.Owner, &pendingOwner, &p.Status, &createdAtStr, &metadataJSON)
+		&listed, &p.MembershipPolicy, &p.Owner, &pendingOwner, &p.Status, &p.CreatedAt, &metadataJSON)
 	if err != nil {
 		return model.Project{}, err
 	}
@@ -93,9 +92,6 @@ func scanProject(row interface{ Scan(...any) error }) (model.Project, error) {
 	p.Listed = listed != 0
 	p.Metadata = fromJSON[map[string]any](metadataJSON)
 	p.Repository, _ = p.Metadata["repository"].(string)
-	if t, perr := time.Parse(time.RFC3339, createdAtStr); perr == nil {
-		p.CreatedAt = t
-	}
 	return p, nil
 }
 
@@ -114,9 +110,9 @@ func (s *ProjectStore) FindByRepository(ctx context.Context, agentID, repository
 	for rows.Next() {
 		var p model.Project
 		var listed int
-		var metadataJSON, createdAtStr string
+		var metadataJSON string
 		var myStatus, pendingOwner sql.NullString
-		if err := rows.Scan(&p.ProjectID, &p.SchemaVersion, &p.Name, &p.Objective, &p.Visibility, &listed, &p.MembershipPolicy, &p.Owner, &pendingOwner, &p.Status, &createdAtStr, &metadataJSON, &myStatus); err != nil {
+		if err := rows.Scan(&p.ProjectID, &p.SchemaVersion, &p.Name, &p.Objective, &p.Visibility, &listed, &p.MembershipPolicy, &p.Owner, &pendingOwner, &p.Status, &p.CreatedAt, &metadataJSON, &myStatus); err != nil {
 			return nil, err
 		}
 		p.Listed = listed != 0
@@ -124,9 +120,6 @@ func (s *ProjectStore) FindByRepository(ctx context.Context, agentID, repository
 		p.Repository, _ = p.Metadata["repository"].(string)
 		if pendingOwner.Valid {
 			p.PendingOwner = &pendingOwner.String
-		}
-		if t, e := time.Parse(time.RFC3339, createdAtStr); e == nil {
-			p.CreatedAt = t
 		}
 		member := myStatus.Valid && myStatus.String == model.MemberActive
 		if p.Visibility == model.ProjectClosed && !member && p.Owner != agentID {
@@ -184,10 +177,10 @@ func (s *ProjectStore) List(ctx context.Context, agentID string) ([]model.Projec
 	for rows.Next() {
 		var p model.Project
 		var listed int
-		var metadataJSON, createdAtStr string
+		var metadataJSON string
 		var myStatus, pendingOwner sql.NullString
 		if err := rows.Scan(&p.ProjectID, &p.SchemaVersion, &p.Name, &p.Objective, &p.Visibility,
-			&listed, &p.MembershipPolicy, &p.Owner, &pendingOwner, &p.Status, &createdAtStr, &metadataJSON, &myStatus); err != nil {
+			&listed, &p.MembershipPolicy, &p.Owner, &pendingOwner, &p.Status, &p.CreatedAt, &metadataJSON, &myStatus); err != nil {
 			return nil, err
 		}
 		if pendingOwner.Valid {
@@ -195,9 +188,6 @@ func (s *ProjectStore) List(ctx context.Context, agentID string) ([]model.Projec
 		}
 		p.Listed = listed != 0
 		p.Metadata = fromJSON[map[string]any](metadataJSON)
-		if t, perr := time.Parse(time.RFC3339, createdAtStr); perr == nil {
-			p.CreatedAt = t
-		}
 
 		member := myStatus.Valid && myStatus.String == model.MemberActive
 		if p.Visibility == model.ProjectClosed && !member && p.Owner != agentID {
@@ -221,7 +211,7 @@ func boolToInt(b bool) int {
 func (s *ProjectStore) Nominate(ctx context.Context, projectID, newOwner string) (model.Project, error) {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE projects SET pending_owner=?, pending_owner_at=? WHERE project_id=? AND status=?`,
-		newOwner, time.Now().UTC().Format(time.RFC3339), projectID, model.ProjectActive)
+		newOwner, dbNow(), projectID, model.ProjectActive)
 	if err != nil {
 		return model.Project{}, err
 	}
@@ -268,7 +258,7 @@ func (s *ProjectStore) AcceptTransfer(ctx context.Context, projectID, newOwner s
 			VALUES (?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(project_id, agent_id) DO UPDATE SET status=excluded.status`,
 			projectID, currentOwner, model.MemberActive, model.RoleMember, nil,
-			time.Now().UTC().Format(time.RFC3339), nil, nil, time.Now().UTC().Format(time.RFC3339),
+			dbNow(), nil, nil, dbNow(),
 		); err != nil {
 			return model.Project{}, err
 		}

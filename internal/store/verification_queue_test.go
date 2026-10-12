@@ -68,7 +68,7 @@ func TestVerificationQueueFencingAndRetry(t *testing.T) {
 	if _, err := s.Tasks.db.Exec(`DROP TRIGGER fail_verdict ON verifications`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Tasks.db.Exec(`UPDATE verification_jobs SET lease_until='',next_at='' WHERE task_id=?`, task.TaskID); err != nil {
+	if _, err := s.Tasks.db.Exec(`UPDATE verification_jobs SET lease_until='-infinity',next_at='-infinity' WHERE task_id=?`, task.TaskID); err != nil {
 		t.Fatal(err)
 	}
 	second, err := s.Tasks.ClaimVerification(ctx, task.CreatedBy)

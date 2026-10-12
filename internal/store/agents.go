@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
 	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
@@ -41,7 +40,7 @@ func buildMetadata(req model.RegisterRequest) map[string]any {
 // moves straight to READY.
 func (s *AgentStore) Create(ctx context.Context, req model.RegisterRequest) (model.Agent, error) {
 	agentID := idgen.New("agent")
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 	load := 0.0
 	if req.CurrentLoad != nil {
 		load = *req.CurrentLoad
@@ -74,7 +73,7 @@ func (s *AgentStore) Update(ctx context.Context, agentID string, req model.Regis
 	caps := orEmptySlice(req.Capabilities)
 	constraints := orEmptyMap(req.Constraints)
 	metadata := buildMetadata(req)
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE agents SET capabilities=?, tools=?, skills=?, constraints=?, preferred_roles=?, evidence=?, operator=?, load=?, metadata=?, updated_at=?

@@ -48,7 +48,7 @@ func visibleScopeSQL(taskColumn string) string {
 func visibleScopeArgs(agentID string, withTaskColumn bool) []any {
 	args := []any{agentID}
 	if withTaskColumn {
-		args = append(args, agentID, time.Now().UTC().Format(time.RFC3339))
+		args = append(args, agentID, dbNow())
 	}
 	return args
 }
@@ -61,9 +61,9 @@ const membershipColumns = `project_id, agent_id, status, role, work_role, invite
 
 func scanMembership(row interface{ Scan(...any) error }) (model.ProjectMembership, error) {
 	var m model.ProjectMembership
-	var invitedBy, joinedAt, scope, expiresAt sql.NullString
-	var createdAt string
-	if err := row.Scan(&m.ProjectID, &m.AgentID, &m.Status, &m.Role, &m.WorkRole, &invitedBy, &joinedAt, &scope, &expiresAt, &createdAt); err != nil {
+	var invitedBy, scope sql.NullString
+	var joinedAt, expiresAt sql.NullTime
+	if err := row.Scan(&m.ProjectID, &m.AgentID, &m.Status, &m.Role, &m.WorkRole, &invitedBy, &joinedAt, &scope, &expiresAt, &m.CreatedAt); err != nil {
 		return model.ProjectMembership{}, err
 	}
 	if invitedBy.Valid {
@@ -72,19 +72,8 @@ func scanMembership(row interface{ Scan(...any) error }) (model.ProjectMembershi
 	if scope.Valid {
 		m.Scope = &scope.String
 	}
-	if t, err := time.Parse(time.RFC3339, createdAt); err == nil {
-		m.CreatedAt = t
-	}
-	if joinedAt.Valid {
-		if t, err := time.Parse(time.RFC3339, joinedAt.String); err == nil {
-			m.JoinedAt = &t
-		}
-	}
-	if expiresAt.Valid {
-		if t, err := time.Parse(time.RFC3339, expiresAt.String); err == nil {
-			m.ExpiresAt = &t
-		}
-	}
+	m.JoinedAt = timePtr(joinedAt)
+	m.ExpiresAt = timePtr(expiresAt)
 	return m, nil
 }
 
@@ -138,7 +127,7 @@ func (s *MembershipStore) Invite(ctx context.Context, projectID, agentID, invite
 		return model.ProjectMembership{}, err
 	}
 
-	now := time.Now().UTC()
+	now := dbNow()
 	status := model.MemberInvited
 	var scope, expiresAt, joinedAt any
 	if req.Reviewer {
@@ -146,8 +135,8 @@ func (s *MembershipStore) Invite(ctx context.Context, projectID, agentID, invite
 		// immediately rather than waiting to be accepted.
 		status = model.MemberReviewer
 		scope = req.Scope
-		expiresAt = now.Add(time.Duration(req.ExpiresInSeconds) * time.Second).Format(time.RFC3339)
-		joinedAt = now.Format(time.RFC3339)
+		expiresAt = now.Add(time.Duration(req.ExpiresInSeconds) * time.Second)
+		joinedAt = now
 	}
 
 	_, err = s.db.ExecContext(ctx, `
@@ -156,7 +145,7 @@ func (s *MembershipStore) Invite(ctx context.Context, projectID, agentID, invite
 			status=excluded.status, role=excluded.role, invited_by=excluded.invited_by,
 			joined_at=excluded.joined_at, scope=excluded.scope, expires_at=excluded.expires_at,
 			created_at=excluded.created_at`,
-		projectID, agentID, status, model.RoleMember, model.WorkRoleUnassigned, nullIfEmpty(invitedBy), joinedAt, scope, expiresAt, now.Format(time.RFC3339),
+		projectID, agentID, status, model.RoleMember, model.WorkRoleUnassigned, nullIfEmpty(invitedBy), joinedAt, scope, expiresAt, now,
 	)
 	if err != nil {
 		return model.ProjectMembership{}, err
@@ -168,7 +157,7 @@ func (s *MembershipStore) Invite(ctx context.Context, projectID, agentID, invite
 // normally need membership rows, so this creates one solely to persist the
 // server-granted specialization.
 func (s *MembershipStore) SetWorkRole(ctx context.Context, projectID, agentID, workRole string) (model.ProjectMembership, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO project_members (`+membershipColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?)
 	 ON CONFLICT(project_id,agent_id) DO UPDATE SET work_role=excluded.work_role`, projectID, agentID, model.MemberActive, model.RoleMember, workRole, nil, now, nil, nil, now)
 	if err != nil {
@@ -179,7 +168,7 @@ func (s *MembershipStore) SetWorkRole(ctx context.Context, projectID, agentID, w
 
 // Enroll records an open-project participant without resetting existing roles.
 func (s *MembershipStore) Enroll(ctx context.Context, projectID, agentID string) (model.ProjectMembership, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO project_members (project_id,agent_id,status,created_at,joined_at) VALUES (?,?,'active',?,?) ON CONFLICT DO NOTHING`, projectID, agentID, now, now)
 	if err != nil {
 		return model.ProjectMembership{}, err
@@ -216,7 +205,7 @@ func (s *MembershipStore) Decide(ctx context.Context, projectID, agentID string,
 
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE project_members SET status=?, joined_at=? WHERE project_id=? AND agent_id=?`,
-		model.MemberActive, time.Now().UTC().Format(time.RFC3339), projectID, agentID); err != nil {
+		model.MemberActive, dbNow(), projectID, agentID); err != nil {
 		return model.ProjectMembership{}, err
 	}
 	return s.Get(ctx, projectID, agentID)

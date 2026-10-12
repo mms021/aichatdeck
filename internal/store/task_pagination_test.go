@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"reflect"
 	"testing"
@@ -85,5 +86,15 @@ func TestTaskMatchingPagination(t *testing.T) {
 				t.Fatalf("unqualified task: %+v cursor=%q err=%v", tasks, next, err)
 			}
 		})
+	}
+}
+
+func TestTaskListRejectsCursorWithBadTimestamp(t *testing.T) {
+	s := openTestDB(t)
+	agent := mustCreateAgent(t, s.Agents)
+	bad := base64.URLEncoding.EncodeToString([]byte("not-a-time|task-x"))
+	_, _, err := s.Tasks.List(context.Background(), agent.AgentID, model.TaskFilter{Cursor: bad})
+	if code := apiCode(t, err); code != model.ErrValidationError {
+		t.Fatalf("expected validation error, got %s", code)
 	}
 }

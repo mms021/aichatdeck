@@ -8,9 +8,9 @@ import (
 )
 
 type Leadership struct {
-	AgentID    string `json:"agent_id"`
-	Generation int64  `json:"generation"`
-	LeaseUntil string `json:"lease_until"`
+	AgentID    string    `json:"agent_id"`
+	Generation int64     `json:"generation"`
+	LeaseUntil time.Time `json:"lease_until,omitzero"`
 }
 
 func (s *ProjectStore) Leadership(ctx context.Context, id string) (Leadership, error) {
@@ -23,7 +23,7 @@ func (s *ProjectStore) Leadership(ctx context.Context, id string) (Leadership, e
 }
 
 func (s *MembershipStore) AssignWithLease(ctx context.Context, project, actor, subject, role string, generation int64) (model.ProjectMembership, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 	res, err := s.db.ExecContext(ctx, `INSERT INTO project_members(project_id,agent_id,status,role,work_role,created_at,joined_at)
  SELECT project_id,?,'active','member',?,?,? FROM project_leadership WHERE project_id=? AND agent_id=? AND generation=? AND lease_until>?
  ON CONFLICT(project_id,agent_id) DO UPDATE SET work_role=excluded.work_role`, subject, role, now, now, project, actor, generation, now)
@@ -45,8 +45,8 @@ func (s *ProjectStore) ChangeLeadership(ctx context.Context, id, actor, target s
 		return Leadership{}, err
 	}
 	defer tx.Rollback()
-	now := time.Now().UTC().Format(time.RFC3339)
-	until := time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)
+	now := dbNow()
+	until := dbNow().Add(5 * time.Minute)
 	// Lock the project row: with no leadership row yet there is nothing else
 	// to lock, and two first acquisitions would both pass the check below.
 	var locked string
@@ -62,11 +62,11 @@ func (s *ProjectStore) ChangeLeadership(ctx context.Context, id, actor, target s
 		return l, err
 	}
 	if expected == 0 {
-		if err == nil && l.LeaseUntil > now {
+		if err == nil && l.LeaseUntil.After(now) {
 			return l, model.Conflict("leadership lease is active")
 		}
 		target = actor
-	} else if err != nil || l.AgentID != actor || l.Generation != expected || l.LeaseUntil <= now {
+	} else if err != nil || l.AgentID != actor || l.Generation != expected || !l.LeaseUntil.After(now) {
 		return l, model.Conflict("stale leadership generation or expired lease")
 	}
 	generation := l.Generation
@@ -84,7 +84,7 @@ func (s *ProjectStore) ChangeLeadership(ctx context.Context, id, actor, target s
 }
 
 func (s *ProjectStore) SaveProgress(ctx context.Context, id, actor, task, claim string, generation int64, payload any) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 	var result sql.Result
 	var err error
 	if task != "" {

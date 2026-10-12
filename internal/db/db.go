@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/stdlib"
 
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/schema"
@@ -28,10 +31,15 @@ type Tx struct{ *sql.Tx }
 // Open connects to databaseURL, applies schema.SQL and seeds the instance
 // identity. The schema is idempotent, so every process start re-applies it.
 func Open(databaseURL string) (*DB, error) {
-	sqlDB, err := sql.Open("pgx", databaseURL)
+	cfg, err := pgx.ParseConfig(databaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("open postgres: %w", err)
+		return nil, fmt.Errorf("parse database url: %w", err)
 	}
+	sqlDB := stdlib.OpenDB(*cfg, stdlib.OptionAfterConnect(func(_ context.Context, c *pgx.Conn) error {
+		// Scan timestamptz as UTC rather than the process's local zone.
+		c.TypeMap().RegisterType(&pgtype.Type{Name: "timestamptz", OID: pgtype.TimestamptzOID, Codec: &pgtype.TimestamptzCodec{ScanLocation: time.UTC}})
+		return nil
+	}))
 	sqlDB.SetMaxOpenConns(20)
 	if err := sqlDB.Ping(); err != nil {
 		sqlDB.Close()

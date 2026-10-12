@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
-	"time"
 
 	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
@@ -76,13 +75,13 @@ func (s *KnowledgeStore) Create(ctx context.Context, author string, req model.Cr
 	}
 
 	id := idgen.New("knowledge")
-	now := time.Now().UTC()
+	now := dbNow()
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO knowledge (`+knowledgeColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, "1.0", req.Category, author, toJSON(orEmptyMap(req.Content)), nullIfEmpty(req.Source),
 		req.Confidence, model.KnowledgeProposed, toJSON(orEmptySlice(req.Tags)),
 		toJSON(orEmptySlice(req.References)), nullableString(req.ProjectID), nullableString(req.TaskID),
-		nullableString(req.Supersedes), nil, version, now.Format(time.RFC3339),
+		nullableString(req.Supersedes), nil, version, now,
 	)
 	if err != nil {
 		return model.Knowledge{}, err
@@ -104,11 +103,11 @@ func (s *KnowledgeStore) Create(ctx context.Context, author string, req model.Cr
 
 func scanKnowledge(row interface{ Scan(...any) error }) (model.Knowledge, error) {
 	var k model.Knowledge
-	var contentJSON, tagsJSON, refsJSON, createdAtStr string
+	var contentJSON, tagsJSON, refsJSON string
 	var source, projectID, taskID, supersedes, supersededBy sql.NullString
 	err := row.Scan(&k.KnowledgeID, &k.SchemaVersion, &k.Category, &k.Author, &contentJSON, &source,
 		&k.Confidence, &k.Status, &tagsJSON, &refsJSON, &projectID, &taskID,
-		&supersedes, &supersededBy, &k.Version, &createdAtStr)
+		&supersedes, &supersededBy, &k.Version, &k.CreatedAt)
 	if err != nil {
 		return model.Knowledge{}, err
 	}
@@ -129,9 +128,6 @@ func scanKnowledge(row interface{ Scan(...any) error }) (model.Knowledge, error)
 	}
 	if supersededBy.Valid {
 		k.SupersededBy = &supersededBy.String
-	}
-	if t, perr := time.Parse(time.RFC3339, createdAtStr); perr == nil {
-		k.CreatedAt = t
 	}
 	return k, nil
 }
@@ -257,7 +253,7 @@ func (s *KnowledgeStore) Search(ctx context.Context, viewer string, filter model
 	var nextCursor string
 	if len(out) > limit {
 		last := out[limit-1]
-		nextCursor = encodeCursor(last.CreatedAt.Format(time.RFC3339), last.KnowledgeID)
+		nextCursor = encodeCursor(last.CreatedAt, last.KnowledgeID)
 		out = out[:limit]
 	}
 

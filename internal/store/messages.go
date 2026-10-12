@@ -27,7 +27,7 @@ const (
 // row, with isNew=false so the caller (the HTTP handler) knows not to
 // re-publish a bus wakeup or re-run any other message side effect.
 func (s *MessageStore) Insert(ctx context.Context, env model.Envelope) (model.Envelope, bool, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 
 	var replyTo, taskID, conversationID any
 	if env.ReplyTo != nil {
@@ -53,7 +53,7 @@ func (s *MessageStore) Insert(ctx context.Context, env model.Envelope) (model.En
 		INSERT INTO messages (`+messageInsertColumns+`)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (message_id) DO NOTHING`,
 		env.MessageID, env.ProtocolVersion, env.Type, env.Sender, env.Recipient,
-		env.Timestamp.UTC().Format(time.RFC3339), conversationID, taskID, env.Priority,
+		env.Timestamp.UTC(), conversationID, taskID, env.Priority,
 		string(env.Payload), toJSON(orEmptySlice(env.Evidence)), replyTo, ttl, now,
 	)
 	if err != nil {
@@ -75,7 +75,7 @@ func (s *MessageStore) Insert(ctx context.Context, env model.Envelope) (model.En
 		}
 		res, err := tx.ExecContext(ctx, `UPDATE tasks SET status=?, submitted_message_id=?, lease_expires_at=NULL
 			WHERE task_id=? AND status=? AND owner=? AND created_by=? AND claim_id=? AND lease_expires_at>?`,
-			model.TaskSubmitted, env.MessageID, env.TaskID, model.TaskClaimed, env.Sender, env.Recipient, payload.ClaimID, time.Now().UTC().Format(time.RFC3339))
+			model.TaskSubmitted, env.MessageID, env.TaskID, model.TaskClaimed, env.Sender, env.Recipient, payload.ClaimID, dbNow())
 		if err != nil {
 			return model.Envelope{}, false, err
 		}
@@ -99,16 +99,14 @@ func (s *MessageStore) Insert(ctx context.Context, env model.Envelope) (model.En
 func scanMessage(row interface{ Scan(...any) error }) (model.Envelope, int64, error) {
 	var e model.Envelope
 	var seq int64
-	var tsStr, receivedAtStr, payloadStr, evidenceJSON string
+	var payloadStr, evidenceJSON string
+	var receivedAt time.Time
 	var conversationID, taskID, replyTo sql.NullString
 	var ttl sql.NullInt64
-	err := row.Scan(&seq, &e.MessageID, &e.ProtocolVersion, &e.Type, &e.Sender, &e.Recipient, &tsStr,
-		&conversationID, &taskID, &e.Priority, &payloadStr, &evidenceJSON, &replyTo, &ttl, &receivedAtStr)
+	err := row.Scan(&seq, &e.MessageID, &e.ProtocolVersion, &e.Type, &e.Sender, &e.Recipient, &e.Timestamp,
+		&conversationID, &taskID, &e.Priority, &payloadStr, &evidenceJSON, &replyTo, &ttl, &receivedAt)
 	if err != nil {
 		return model.Envelope{}, 0, err
-	}
-	if ts, perr := time.Parse(time.RFC3339, tsStr); perr == nil {
-		e.Timestamp = ts
 	}
 	if conversationID.Valid {
 		e.ConversationID = conversationID.String
@@ -125,7 +123,7 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Envelope, int64, er
 	}
 	e.Payload = []byte(payloadStr)
 	e.Evidence = fromJSON[[]string](evidenceJSON)
-	_ = receivedAtStr // stored for audit/debugging; ordering uses seq
+	_ = receivedAt // stored for audit/debugging; ordering uses seq
 	return e, seq, nil
 }
 

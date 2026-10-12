@@ -22,6 +22,7 @@ func TestConcurrentRotationHasExactlyOneWinner(t *testing.T) {
 		key model.CredentialOut
 		err error
 	}
+	warmPool(t, s.Tasks.db, 8)
 	start := make(chan struct{})
 	results := make(chan outcome, 8)
 	for i := 0; i < cap(results); i++ {
@@ -68,6 +69,7 @@ func TestRotationCannotEscapeConcurrentOperatorRevoke(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		warmPool(t, s.Tasks.db, 2)
 		var rotateErr, revokeErr error
 		start := make(chan struct{})
 		var wg sync.WaitGroup
