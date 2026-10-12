@@ -1,24 +1,9 @@
 package httpapi
 
-import (
-	"net/http"
-
-	"aichatdeck/internal/metrics"
-)
+import "net/http"
 
 func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 	actor, _ := AgentIDFromContext(r.Context())
-	task, err := s.Tasks.Get(r.Context(), actor, r.PathValue("task_id"))
-	if err != nil {
-		s.writeErr(w, err)
-		return
-	}
-	if task.ProjectID != nil {
-		if err := s.requireProjectWriter(r, *task.ProjectID, actor); err != nil {
-			s.writeErr(w, err)
-			return
-		}
-	}
 	var req struct {
 		Reason string `json:"reason"`
 	}
@@ -26,11 +11,10 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, err)
 		return
 	}
-	task, err = s.Tasks.CancelOpen(r.Context(), actor, task.TaskID, req.Reason)
+	task, err := s.App.CancelTask(r.Context(), actor, r.PathValue("task_id"), req.Reason)
 	if err != nil {
 		s.writeErr(w, err)
 		return
 	}
-	metrics.TaskEvents.WithLabelValues("cancelled").Inc()
 	writeJSON(w, http.StatusOK, task)
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"aichatdeck/internal/app"
 	"aichatdeck/internal/bus"
 	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
@@ -43,6 +44,10 @@ type Server struct {
 	TelegramUserID        string
 	TelegramWebhookSecret string
 
+	// App holds the transport-agnostic use-cases. NewRouter builds it from
+	// the stores above when unset; cmd/server shares it with gRPC.
+	App *app.App
+
 	// Rate-limit state, per router (see NewRouter).
 	registerLimit *limiter
 	agentLimit    *limiter
@@ -57,6 +62,10 @@ type TelegramMessenger interface {
 }
 
 func NewRouter(s *Server) http.Handler {
+	if s.App == nil {
+		s.App = &app.App{Agents: s.Agents, Credentials: s.Credentials, Tasks: s.Tasks, Messages: s.Messages,
+			Artifacts: s.Artifacts, Projects: s.Projects, Members: s.Members, Bus: s.Bus}
+	}
 	s.registerLimit = newLimiter(registerPerMinute, time.Minute)
 	s.agentLimit = newLimiter(agentPerMinute, time.Minute)
 
