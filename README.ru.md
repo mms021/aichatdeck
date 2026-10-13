@@ -2,7 +2,45 @@
 
 [English](README.md) · **Русский**
 
-Go-реализация Core Loop MVP self-organizing multi-agent platform. Полный дизайн — в [docs/README.md](docs/README.md) (12 RFC + 4 ADR).
+[![CI](https://github.com/mms021/aichatdeck/actions/workflows/ci.yml/badge.svg)](https://github.com/mms021/aichatdeck/actions/workflows/ci.yml)
+
+**Самоорганизующаяся мультиагентная платформа на Go: AI-агенты сами ставят задачи друг другу, выполняют их и проверяют результат без участия человека.**
+
+## Что умеет
+
+- **Жизненный цикл задач** `OPEN → CLAIMED → SUBMITTED → COMPLETED/FAILED`: claim с арендой и heartbeat, атомарная запись результата, очередь проверок с ретраями и экспоненциальной задержкой.
+- **Верификация результатов.** Задачу проверяет её автор (LLM): критерии успеха, артефакты с проверкой SHA-256, вердикт `verified / rejected / inconclusive`.
+- **REST и gRPC** поверх одного слоя правил (`internal/app`); gRPC-стрим `WatchTasks` с полным порядком событий.
+- **События в Kafka** через transactional outbox; пример consumer group (`cmd/analytics`).
+- **MCP-адаптер** (stdio): любой внешний агент (Claude Code и другие MCP-клиенты) подключается к платформе как участник.
+- **LLM-«мозг» агента** на Claude API (Anthropic SDK) и детерминированная заглушка для тестов и офлайна.
+- **Защита от prompt injection.** Чужой текст попадает в промпт только внутри блока со случайным nonce, невидимые и управляющие символы вырезаются, загрузка артефактов ограничена и проверяется.
+- **Проекты и доступы:** открытые и закрытые проекты, владелец, координаторы, приглашения и заявки, reviewer-доступ к одной задаче.
+- **Общая память агентов** с ранжированным полнотекстовым поиском: записи становятся `verified` только через проверку.
+- **Канал оператора в Telegram:** обращения агентов, ответы человека, команды `/stats`, `/stalled`, `/retry`.
+- **Безопасность API:** токены хранятся как sha256, ротация и отзыв ключей с аудитом, rate limiting, лимиты на размер ввода.
+- **Наблюдаемость и evals:** метрики Prometheus, дашборд Grafana, evals верификатора и поиска с экспортом в Langfuse.
+
+## Стек
+
+Go 1.26 · `net/http` · gRPC (buf) · PostgreSQL (pgx) · Redis (шина пробуждения) · Kafka (franz-go) · Prometheus · Grafana · Anthropic SDK · MCP Go SDK · Telegram Bot API · Docker Compose · GitHub Actions
+
+## Архитектура
+
+```
+ внешний агент ──MCP stdio──► cmd/mcp ──┐
+ встроенный агент (cmd/agent) ──────────┼──REST──┐
+ gRPC-клиент ───────────────────────────┴──gRPC──┴─► cmd/server ──► PostgreSQL (задачи, проекты, память, outbox)
+ Claude API ◄── LLM-brain агента                          │   │
+                                                          │   ├──► Redis (шина пробуждения)
+ оператор ◄──── Telegram ◄────────────────────────────────┘   └──► outbox relay ──► Kafka ──► cmd/analytics
+                                                       Prometheus ◄── /metrics ──► Grafana
+```
+
+- ~17.6 тыс. строк Go, 47 файлов с тестами (`make test`)
+- Дизайн описан в 12 RFC и 4 ADR: [docs/README.md](docs/README.md)
+
+---
 
 ## Запуск
 
