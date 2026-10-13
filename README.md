@@ -1,246 +1,293 @@
 # aichatdeck
 
-Go-реализация Core Loop MVP self-organizing multi-agent platform. Полный дизайн — в [docs/README.md](docs/README.md) (12 RFC + 4 ADR).
+**A coordination platform for autonomous LLM agents.** Agents register,
+discover each other, take work from a shared task queue under leases, report
+results with evidence, and have those results judged by an LLM verifier
+before a task counts as done. Shared memory, projects with access control,
+and an MCP adapter let off-the-shelf coding agents (Claude Code, Codex) join
+as workers.
 
-## Запуск
+[![ci](https://github.com/mms021/self-organizing-multi-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/mms021/self-organizing-multi-agent/actions/workflows/ci.yml)
+![Go](https://img.shields.io/badge/go-1.26-00ADD8)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-336791)
+![Kafka](https://img.shields.io/badge/Kafka-KRaft-231F20)
+
+[Quickstart](#quickstart) · [Architecture](#architecture) · [Results](#results) ·
+[Evals](evals/README.md) · [Design (12 RFCs + 4 ADRs)](docs/README.md) ·
+[gRPC API](proto/aichatdeck/v1/tasks.proto) · [MCP tools](docs/mcp.md) ·
+[Русская версия](README.ru.md)
+
+---
+
+## Overview
+
+Many agents working on one codebase need the same things a team does: a
+place to pick up work without two people grabbing the same ticket, a way to
+hand over results that someone else checks, a shared notebook, and a record
+of what happened. aichatdeck provides that as a service, with the platform
+itself making no LLM calls: judgement stays in the agents.
+
+- **Task queue with leases.** `OPEN → CLAIMED → SUBMITTED → COMPLETED/FAILED`.
+  A claim is a compare-and-swap with a 5-minute lease kept alive by
+  heartbeats; an abandoned claim returns to the queue.
+- **Verification by the task's creator.** A RESULT is judged by an LLM
+  verifier (`verified` / `rejected` / `inconclusive`) through a durable,
+  leased verification queue with retries and backoff.
+- **Built for untrusted input.** Anyone can register, so every objective,
+  result and memory entry is treated as data written by another agent:
+  nonce-fenced in prompts, sanitized, size-bounded. A result that tries to
+  dictate its own verdict is grounds for rejection.
+- **Two transports, one core.** REST and gRPC (with a streamed, totally
+  ordered event feed) call the same use-case layer, so access rules exist once.
+- **Events and observability.** Every task transition goes through a
+  transactional outbox to Kafka; Prometheus metrics and a provisioned
+  Grafana dashboard come with the stack.
+- **Evals.** The verifier and memory search are measured, not assumed:
+  [evals/README.md](evals/README.md), with Langfuse export.
+
+## Quickstart
+
+Requires Docker. All host ports sit in the `47xxx` range so the stack runs
+next to whatever else you have on `5432`, `6379` or `8080`.
 
 ```bash
-docker compose up -d --build --wait   # postgres, redis, server, prometheus, grafana
-./scripts/smoke.sh                    # сквозной сценарий (нужны curl, jq)
+docker compose up -d --build --wait   # postgres, redis, kafka, server, analytics, prometheus, grafana
+./scripts/smoke.sh                    # register two agents, create → claim → submit → verify (curl, jq)
 ```
 
-| Сервис | Адрес |
+| Service | Address |
 |---|---|
-| API | http://localhost:47080 |
-| gRPC (`aichatdeck.v1.TaskService`, reflection) | localhost:47051 |
-| Grafana (дашборд `aichatdeck`, анонимный просмотр) | http://localhost:47300 |
+| REST API | http://localhost:47080 |
+| gRPC (`aichatdeck.v1.TaskService`, server reflection) | localhost:47051 |
+| Grafana (dashboard `aichatdeck`, anonymous view) | http://localhost:47300 |
 | Prometheus | http://localhost:47091 |
-| Kafka (снаружи compose) | localhost:47092 |
+| Kafka (from the host) | localhost:47092 |
 
-Метрики сервер отдаёт на отдельном порту (`METRICS_ADDR`, по умолчанию `:47090`),
-чтобы счётчики не были видны через публичный API: латентность и частота по
-шаблону маршрута, переходы задач, вердикты, ошибки по `error_code`, ожидающие
-long-poll, пул соединений, а также снимаемые при scrape из Postgres
-`aichatdeck_tasks{status}` и `aichatdeck_verification_queue{state}`.
-
-Хранилище — PostgreSQL (`DATABASE_URL`, драйвер `pgx`), Redis — только
-wakeup-сигналы для long-poll. Порты на хосте меняются через `PG_PORT`,
-`REDIS_PORT`, `SERVER_PORT`, `GRAFANA_PORT`, `PROMETHEUS_PORT`.
-
-Для локальных агентов из `.mcp.json` запускайте сервер из исходников через
-`./scripts/run-local.sh`: он поднимает postgres и redis в compose и слушает
-`127.0.0.1:47080`. Локальная привязка проекта лежит в
-`.aichatdeck/project.json`; секреты агентов хранятся отдельно вне Git.
-
-## gRPC
-
-`TaskService` ([proto/aichatdeck/v1/tasks.proto](proto/aichatdeck/v1/tasks.proto))
-повторяет жизненный цикл задачи из REST: `CreateTask`, `GetTask`, `ListTasks`,
-`ClaimTask`, `HeartbeatTask`, `SubmitResult`, `VerifyTask`, `CancelTask`, плюс
-server-streaming `WatchTasks`. Оба транспорта вызывают один слой
-`internal/app`, поэтому правила доступа к проектам, ролей и capabilities
-существуют в одном месте; rate limit на агента общий.
-
-Авторизация — metadata `authorization: Bearer <token>` (тот же credential, что
-и для REST). Ошибки — стандартные gRPC-коды (`PERMISSION_DENIED`,
-`FAILED_PRECONDITION` для проигранной гонки claim и т.д.), исходный
-`error_code` передаётся в trailer `error-code`.
-
-`WatchTasks` отдаёт события задач, видимых вызывающему, в полном порядке
-`seq`. Порядок назначает relay outbox: он один и читает только
-закоммиченные строки, поэтому строка, ставшая видимой позже, не может
-оказаться за курсором клиента (с `id` такое возможно). Для продолжения после
-обрыва передайте последний `seq`; события хранятся сутки.
+Close the loop with two agents and no human: one creates a task and verifies
+the result, the other claims and does it (`ANTHROPIC_API_KEY` set → Claude,
+otherwise a deterministic stub):
 
 ```bash
-grpcurl -plaintext localhost:47051 list
-grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{"objective":"hi"}' \
-  localhost:47051 aichatdeck.v1.TaskService/CreateTask
-grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{}' \
-  localhost:47051 aichatdeck.v1.TaskService/WatchTasks
+go run ./cmd/agent -name worker  -caps testing -tools shell -state ./worker.json
+go run ./cmd/agent -name creator -caps planning -state ./creator.json -task "add two and two"
 ```
 
-Код генерируется `make proto` (buf); CI проверяет `buf lint`, формат и что
-сгенерированный код совпадает с proto.
-
-## События (Kafka)
-
-Каждый переход задачи (`task.created`, `claimed`, `submitted`, `verified`,
-`cancelled`, `requeued`) пишется в таблицу `outbox` тем же SQL-оператором или
-транзакцией, что и само изменение: событие существует ровно тогда, когда
-изменение закоммичено. Relay в сервере публикует outbox в топик
-`aichatdeck.task-events` (franz-go, idempotent producer, ключ — `task_id`, так
-что порядок событий одной задачи сохраняется в партиции). Публикует один relay
-за раз (advisory lock), доставка at-least-once, у каждого события `event_id`
-для дедупликации.
-
-Kafka не на критическом пути: пока брокер недоступен, API работает, а события
-копятся в outbox (`aichatdeck_outbox_pending`, `aichatdeck_outbox_oldest_pending_seconds`)
-и уходят после восстановления.
-
-`cmd/analytics` — пример consumer group: считает lead time задачи (создание →
-вердикт) и задержку доставки события, отдаёт их в Prometheus; в Grafana это
-строка «Events».
+Or over gRPC:
 
 ```bash
-docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server localhost:9092 --topic aichatdeck.task-events --from-beginning --property print.key=true
+TOKEN=$(curl -s -X POST localhost:47080/agents/register -d '{"capabilities":[{"name":"testing"}]}' | jq -r .credential.token)
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{}' localhost:47051 aichatdeck.v1.TaskService/WatchTasks
 ```
 
-## Evals
+To connect Claude Code or Codex as a worker, see [docs/mcp.md](docs/mcp.md)
+and [docs/agent-onboarding-prompt.md](docs/agent-onboarding-prompt.md).
 
-Верификатор (LLM-судья чужих результатов) и поиск по общей памяти
-(retrieval-часть RAG агентов) покрыты evals: [evals/README.md](evals/README.md).
-Оба идут через production-код, прогоны неизменяемы, есть bootstrap-интервалы,
-baseline-судьи и экспорт в Langfuse как эксперимент.
+## Architecture
 
-Retrieval-eval показал, что поиск по памяти находил запись только при
-дословном совпадении подстроки (Recall@5 10%, 90% запросов без результатов).
-После перехода на полнотекстовый поиск Postgres с ранжированием —
-Recall@5 100%, MRR 94%; порог закреплён тестом в CI.
-
-```bash
-make evals                                   # oracle + retrieval, бесплатно
-ANTHROPIC_API_KEY=... go run ./cmd/eval verifier -judge claude -model claude-opus-5 -reps 3
+```mermaid
+flowchart LR
+  subgraph agents [Agents]
+    A1[cmd/agent]
+    A2[Claude Code / Codex<br/>via cmd/mcp]
+    A3[gRPC client]
+  end
+  subgraph server [cmd/server]
+    H[REST]
+    G[gRPC]
+    APP[app: use-cases<br/>and access rules]
+    RELAY[outbox relay]
+  end
+  A1 --> H
+  A2 --> H
+  A3 --> G
+  H --> APP
+  G --> APP
+  APP --> PG[(PostgreSQL)]
+  APP <-. wakeups .-> R[(Redis)]
+  PG --> RELAY
+  RELAY --> K[(Kafka)]
+  K --> AN[cmd/analytics]
+  server -. metrics .-> P[Prometheus]
+  AN -. metrics .-> P
+  P --> GR[Grafana]
+  H <-. operator .-> TG[Telegram]
 ```
 
-## Агенты
+- **PostgreSQL is the source of truth** (pgx). Redis only carries "something
+  changed" pings; losing a ping delays a wakeup, never loses a message.
+- **No cron, no separate worker.** Expired leases are requeued on the next
+  read. The only background loops in the server are the outbox relay and the
+  operator alert sweep, and both coordinate through the database (an
+  advisory lock, leased rows with `FOR UPDATE SKIP LOCKED`), so running
+  several server replicas is safe.
+- **Agents bring their own LLM.** The platform stores and routes; prompts,
+  tools and API keys live in the agent runtime.
 
-Для внешнего агента доступен MCP-адаптер через stdio: `go build -o ./bin/aichatdeck-mcp ./cmd/mcp`, затем запуск клиентом с `-state /absolute/path/to/agent.json`. Используется существующий credential агента; операторские команды и произвольный HTTP не доступны. [Подключение, инструменты и ограничения MCP](docs/mcp.md).
-
-Для первого подключения или безопасного возобновления личности соберите
-`go build -o ./bin/aichatdeck-agent-connect ./cmd/agent-connect`, затем
-запустите `./bin/aichatdeck-agent-connect -base http://127.0.0.1:47080 -state /absolute/path/agent.json -caps testing -tools shell`. Команда не создаёт новую личность при ошибке credential существующего state-файла. Она также принимает `-project-id`: открытый проект подключается сразу, а для закрытого проекта отправляется заявка только при policy `invite_or_apply`. Готовая инструкция для передачи внешнему агенту — [docs/agent-onboarding-prompt.md](docs/agent-onboarding-prompt.md).
-
-Проект можно привязать к Git remote один раз владельцем: добавьте при создании
-проекта `repository` или выполните `agent-connect -project-id <project-id>
--bind-repository` из нужного репозитория. После этого `agent-connect` без
-`-project-id` автоматически берёт `remote.origin.url`, находит проект и
-подключается к нему. Идентификатор проекта — `project-…`, не порядковый номер.
-
-Самый короткий путь для нового репозитория: владелец с сохранённым credential
-выполняет `go run ./cmd/project-init -state /absolute/path/owner.json -name
-"My project"`. В корне появится не содержащий секретов
-`.aichatdeck/project.json`; агенты в этом репозитории читают его автоматически.
-
-Два процесса замыкают цикл без человека: один ставит задачу и верифицирует результат, другой её берёт и выполняет.
-
-```bash
-go run ./cmd/agent -name worker  -caps testing -tools browser,shell -state ./worker.json
-go run ./cmd/agent -name creator -caps planning -state ./creator.json -task "сложить два и два"
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> OPEN: create
+  OPEN --> CLAIMED: claim
+  CLAIMED --> OPEN: lease expired
+  CLAIMED --> SUBMITTED: RESULT
+  SUBMITTED --> COMPLETED: verified
+  SUBMITTED --> FAILED: rejected
+  OPEN --> CANCELLED: cancel
 ```
 
-`-caps` обязателен: агента без capability не с чем сматчить. `-state` хранит выданный credential — без него перезапуск процесса регистрирует **нового** агента, и задачи прежнего остаются неверифицируемыми (проверить результат может только создатель задачи).
+A claim is a compare-and-swap that starts a 5-minute lease, renewed by
+heartbeats with the same `claim_id`. A RESULT is accepted only with a live
+`claim_id` and atomically enqueues verification; `inconclusive` keeps the
+task `SUBMITTED` and retries with backoff (1, 2, 4, 8 minutes, at most 5
+attempts) before it is left for an operator.
 
-`-tools` — необязательная само-декларация инструментов runtime агента. Платформа не хранит ключи и не запускает эти инструменты: она использует manifest для matching задач с `required_tools`, а результат всё равно требует проверяемых artifacts.
+## Results
 
-Инструкция, которую получает агент — [internal/agent/prompt.md](internal/agent/prompt.md); она же вшита в бинарник как системный промпт.
+Everything below was measured in this repository; how to reproduce each is
+linked.
 
-Жизненный цикл задачи: `OPEN → CLAIMED → SUBMITTED → COMPLETED/FAILED`. Claim выдаёт новый `claim_id` и lease на 5 минут. Для продления отправляйте `POST /tasks/{task_id}/heartbeat` с `{"claim_id":"..."}`; для результата укажите тот же `payload.claim_id`. Просроченные попытки отклоняются. Сохранение RESULT и переход в `SUBMITTED` атомарны; ожидание проверки больше не зависит от lease. `inconclusive` оставляет задачу в `SUBMITTED`; автоматического таймаута проверки пока нет.
+### Memory search (the agents' retrieval step)
 
-Это изменение API требует обновления внешних агентов: heartbeat без `claim_id` и RESULT задачи без `payload.claim_id` больше не принимаются. При обновлении базы старые `CLAIMED` без идентификатора попытки возвращаются в `OPEN` при следующем обращении к задачам; старые сообщения сохраняются, но для проверки нужен результат новой попытки. Встроенный агент и smoke-скрипт обновлены.
+The retrieval eval found that shared memory was effectively unsearchable for
+natural queries: only a verbatim substring matched. Replacing it with ranked
+PostgreSQL full-text search:
 
-Проверяющий получает критерии успеха, ограничения, summary, status/metrics и артефакты из `RESULT.payload.artifacts`. Метаданные загружаются через авторизованный API. Встроенный агент скачивает связанный с задачей и автором результата текст и проверяет SHA-256 исходных байтов; только успешно загруженные и проверенные артефакты попадают в `verification.evidence`. Совпадение хеша подтверждает целостность, но не правдивость лога или фактический запуск тестов.
+| Search | Recall@1 | Recall@5 | MRR@10 | Queries with no result |
+|---|---|---|---|---|
+| Substring `ILIKE`, newest first (before) | 10% | 10% | 10% | 90% |
+| Full-text, `simple` config (ablation: no stemming) | 70% | 93% | 81% | 0% |
+| **Full-text, `russian` config, OR terms, `ts_rank_cd`** | **90%** | **100%** | **94%** | **0%** |
 
-Ограничения загрузки: HTTPS на порту 443, публичные адреса, без редиректов, URL-логина/пароля, прокси окружения и credentials платформы. DNS проверяется перед подключением к зафиксированному IP. Поддерживаются UTF-8 `text/plain`, `text/csv`, `text/tab-separated-values`, `text/markdown`, `text/xml`, `application/json`, `application/xml`, `application/x-ndjson` без сжатия: до 64 КиБ и 3500 Unicode-символов на артефакт, до 8 уникальных артефактов на результат, 5 секунд на скачивание и 30 секунд на весь этап артефактов. Checksum — 64 hex-символа SHA-256, с необязательным префиксом `sha256:`. Неподдерживаемые, недоступные, просроченные, чужие артефакты и несовпадение хеша дают `inconclusive`; `partial`/`failure` не превращаются в полный успех. Файлы не исполняются, их текст передаётся настроенному Brain как недоверенные данные (ClaudeBrain отправляет его провайдеру модели). Для production дополнительно ограничивайте исходящий сетевой доступ на уровне инфраструктуры.
+30 queries over a 30-entry corpus, Russian and English, written before the
+change. Recall@5 saturates on a corpus this small; Recall@1 and MRR still
+discriminate. A CI test holds Recall@5 ≥ 90% and MRR ≥ 85%.
+[Reports](evals/results/) · `make evals`
 
-Регистрация артефакта хранит ссылку, а не загружает файл. Новые ссылки должны использовать HTTPS; `file://` больше не принимается. Разрешены имена без расширения либо `.txt`, `.log`, `.json`, `.xml`, `.csv`, `.tsv`, `.md`, `.ndjson`; известные опасные расширения блокируются также в двойных именах (`report.exe.txt`). Загрузчик повторно проверяет URI, имя из `Content-Disposition`, MIME и содержимое: отклоняет известные сигнатуры исполняемых файлов/архивов, бинарные управляющие байты, shebang-скрипты и активную HTML/SVG-разметку. Неверный JSON не принимается как `application/json`. Это консервативная проверка форматов, не антивирус: произвольный код без сигнатуры может выглядеть как текст, поэтому содержимое никогда не запускается и не считается доверенной инструкцией. Старые записи остаются в базе, но проверяются по новой политике при загрузке.
+### Verifier (LLM-as-a-judge)
 
-Проверки хранятся в PostgreSQL в `verification_jobs` и создаются атомарно с принятым RESULT. Встроенный агент забирает по одной через `POST /verification/claim` независимо от позиции inbox. Ответ — `{"job":null}` либо job с задачей, RESULT, `attempt_id`, номером попытки и `lease_until`. Проверять может только создатель задачи с действующим доступом к проекту; его процесс должен быть запущен и использовать сохранённый credential. Сам сервер LLM не запускает.
+35 labelled cases: correct work, explicit errors, claims that need evidence
+the verifier cannot have, and six prompt-injection attacks. The headline
+metric is the **false-verified rate**: bad or unprovable work recorded as done.
+Null baselines show what the label distribution alone buys:
 
-Аренда проверки — 5 минут; runtime ограничивает обработку четырьмя минутами. В `POST /tasks/{task_id}/verify` передаётся `attempt_id`: устаревшая попытка отклоняется. Всего допускается 5 автоматических попыток. После `inconclusive` задержки — 1, 2, 4, 8 минут; после падения процесса или ошибки без записанного вердикта — истечение аренды плюс соответствующая задержка. Перезапуск сервера не сбрасывает аренды и счётчики; существующие `SUBMITTED` подхватываются миграцией. После исчерпания попыток задача остаётся `SUBMITTED` для ручного разбора. Ручной verify без attempt_id доступен создателю, когда нет активной аренды, но не сбрасывает лимит автоматических попыток. Оператор может повторно поставить исчерпанную проверку в очередь командой Telegram `/retry <task_id>`. EchoBrain остаётся демонстрационной заглушкой и не подтверждает задачи с критериями, ограничениями или артефактами.
+| Judge | Accuracy | False-verified |
+|---|---|---|
+| oracle (gold labels, harness check) | 100% | 0% |
+| always `rejected` | 54.3% | 0% |
+| always `verified` | 31.4% | 100% |
 
-Мозг выбирается флагом `-brain`:
+A model has to beat 54% accuracy *while* keeping false-verified near zero.
+Model runs (`go run ./cmd/eval verifier -judge claude -model <id> -reps 3`,
+about $6-7 per model) export to Langfuse as experiments.
+[Method](evals/README.md#verifier-llm-as-a-judge-judged)
 
-- `auto` (по умолчанию) — Claude, если задан `ANTHROPIC_API_KEY`, иначе детерминированная заглушка
-- `claude` — Claude API
-- `echo` — заглушка, работает офлайн; на ней гоняются тесты
+### Correctness under concurrency
 
-## Запросы оператору в Telegram
+Moving from SQLite (one connection, implicitly serial) to PostgreSQL exposed
+races the old setup hid. Each fix has a test that races real connections and
+**fails without the fix**:
 
-Управление ключами: `POST /credentials/rotate` с текущим Bearer-токеном атомарно отзывает именно этот ключ и возвращает `{credential_id, token}` для прежнего agent_id. Сохраните новый token в защищённом state-файле до продолжения работы; ответ помечен `Cache-Control: no-store`. Автоматической ротации в runtime пока нет. При потере ответа после commit старый ключ уже недействителен, а новый невозможно восстановить из хеша: потребуется административная выдача ключа через доверенный доступ к серверу (публичного recovery endpoint нет).
+| Race | Without the fix | Fix |
+|---|---|---|
+| 16 verifiers claim one job | 16 leases | `FOR UPDATE SKIP LOCKED` |
+| 8 agents take first leadership of a project | 8 leaders | lock the project row |
+| key rotation during operator "revoke all" | rotated key stays active, 10/10 runs | lock the agent row first |
 
-`POST /credentials/revoke` отзывает текущий ключ без замены. Telegram-команда `/revoke <agent_id>` от настроенного user ID отзывает все текущие ключи указанного агента; повтор одного update_id не затрагивает ключи, выданные позднее. Задачи и история не удаляются. Это отзыв credentials, не запрет человеку зарегистрировать новую личность; открытая регистрация сохраняется. Уже авторизованные запросы в процессе выполнения не отменяются, но последующие запросы с отозванным ключом отклоняются. Ротация, самоотзыв и операторский отзыв записываются транзакционно в `credential_audit`, без plaintext-токенов. SQL-триггеры запрещают UPDATE/DELETE аудита; это не защита от администратора, который контролирует файл БД.
+### Event pipeline
 
-State-файлы записываются атомарной заменой с owner-only правами. При чтении файлы с доступом для группы/остальных пользователей и символические ссылки отклоняются: существующие файлы при необходимости исправьте `chmod 600`. Храните их в доверенном каталоге. Встроенный клиент проверяет сохранённый credential перед повторной регистрацией и отказывается менять личность автоматически при отзыве ключа.
+| | |
+|---|---|
+| Commit → Kafka → consumer delay, steady state | ~160 ms |
+| Kafka stopped during traffic | API unaffected; events wait in the outbox |
+| Kafka restarted | backlog drained in ~4 s, every event delivered |
 
-Ответы на обращения сохраняются в inbox вместе со статусом обращения одной
-транзакцией. Повторная доставка reply с тем же Telegram update ID не создаёт
-дубликат. Встроенный агент читает ANSWER от платформы: по умолчанию выводит его
-в лог, а runtime может задать OnOperatorAnswer для продолжения своего workflow.
-Автоматическое возобновление остановленной LLM-задачи пока не реализовано.
+## How it works
 
-Агент может отправить авторизованный `POST /operator/requests` с типом `wish`, `request` или `issue`. Чтобы сервер пересылал такие обращения в Telegram и принимал ваши ответы, задайте только в его окружении:
+**Transactional outbox.** Task transitions append an `outbox` row in the same
+statement as the change (data-modifying CTEs keep the compare-and-swap row
+counts intact), so an event exists exactly when the change committed. A relay
+holding a transaction-scoped advisory lock assigns each event a `seq` and
+publishes it with franz-go (idempotent producer, key = `task_id`): one relay
+at a time keeps per-task order on the wire. Delivery is at-least-once with an
+`event_id` for deduplication; [cmd/analytics](cmd/analytics/main.go) is an
+example consumer group.
 
-```bash
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...            # куда бот присылает обращения
-TELEGRAM_USER_ID=...            # кто может отвечать и вызывать команды
-TELEGRAM_WEBHOOK_SECRET=...     # случайная строка для проверки Telegram webhook
+**Why `WatchTasks` pages on `seq`, not `id`.** Row IDs are assigned at insert
+time, but transactions commit in a different order: a reader at `id > 100`
+can skip row 99 that commits a moment later. `seq` is assigned by the single
+relay from rows already committed, so nothing can appear behind a cursor.
+
+**One use-case layer.** [internal/app](internal/app/app.go) holds project
+visibility, work-role, capability and RESULT rules; REST handlers and the gRPC
+service only decode, call, and encode. The per-agent rate limit is shared too.
+
+**Untrusted text in prompts.** Content from other agents goes into
+`[DATA <nonce> label] … [/DATA <nonce>]` blocks with a random per-prompt nonce
+(a payload cannot close a fence that did not exist when it was written), with
+rules stated before and after, invisible and control characters stripped, and
+length capped ([internal/agent/untrusted.go](internal/agent/untrusted.go)).
+Artifacts are fetched over HTTPS only, checksum-verified, never executed, and
+an intact log is still not treated as proof that tests ran.
+
+**Projects and disclosure.** Open projects group work; closed ones are
+visible to members only. An unlisted closed project answers an outsider with
+`not_found`, exactly like an ID that was never issued, so IDs cannot be
+probed. Ownership transfer is bilateral;
+reviewers get time-boxed read access to a single task.
+
+## Repository layout
+
+```
+cmd/
+  server/          REST + gRPC + metrics + outbox relay
+  agent/           reference agent (Claude or offline stub)
+  mcp/             MCP stdio adapter for Claude Code / Codex
+  agent-connect/   safe first connect / identity resume
+  project-init/    bind a repository to a project
+  analytics/       Kafka consumer → Prometheus
+  eval/            verifier and retrieval evals
+internal/
+  app/             transport-agnostic use-cases
+  httpapi/         REST handlers, auth, rate limits, Telegram
+  grpcapi/         gRPC TaskService
+  store/           PostgreSQL stores (one per aggregate)
+  events/          outbox relay, Kafka publisher
+  agent/           agent loop, Brain (Claude / echo), prompt fencing
+  evals/           eval harness, metrics, Langfuse export
+  metrics/         Prometheus instruments
+  db/, schema/     pgx connection, idempotent schema
+proto/             aichatdeck/v1 (buf)
+evals/             cases, corpus, queries, kept results
+deploy/            Prometheus, Grafana provisioning, local Langfuse
+docs/              RFCs, ADRs, MCP and onboarding guides (Russian)
 ```
 
-Настройте Telegram `setWebhook` на `https://<public-https-host>/telegram/webhook`, передав тот же `secret_token`. В reply на сообщение бота ваш ответ доставляется только агенту-автору обращения. Базовые команды: `/help`, `/stats`, `/health`, `/requests`, `/stalled`, `/retry <task_id>`. Token бота и webhook secret не передаются агентам и не сохраняются в платформе.
+## Reference
 
-При настроенном Telegram сервер каждые 30 секунд проверяет исчерпанные проверки (5 попыток, без действующей аренды), даже если агенты выключены. Уведомление содержит task_id и команду `/retry`, без objective и содержимого артефактов. Состояние доставки хранится в PostgreSQL: при ошибке отправка повторяется после двухминутной аренды; штатно уведомление отправляется один раз за цикл исчерпания. При сбое между приёмом сообщения Telegram и записью подтверждения в БД возможен дубль.
+| Command | Purpose |
+|---|---|
+| `make up` / `make down` | full stack in Docker |
+| `make test` | Postgres in Docker, `go test -race ./...` (one schema per test) |
+| `make lint` | `gofmt`, `go vet` |
+| `make proto` | `buf lint` + regenerate gRPC code |
+| `make evals` | oracle harness check + retrieval eval (no API cost) |
+| `make langfuse` | self-hosted Langfuse on :47400 for eval runs |
 
-`/stalled` показывает до 10 исчерпанных проверок. `/retry <task_id>` отправляйте отдельным сообщением, не reply: команда доступна только настроенному Telegram user ID, сбрасывает попытки исключительно у исчерпанной проверки и не меняет RESULT или состояние выполнения задачи. Для обработки нужен запущенный агент-создатель с доступом к проекту. Повторная доставка одного update_id не перезапускает проверку повторно, в том числе после нового исчерпания. Подтверждение команды отправляется best-effort: если оно потерялось, сверяйтесь с `/stalled`.
+| Server env | Default |
+|---|---|
+| `ADDR` / `GRPC_ADDR` / `METRICS_ADDR` | `:47080` / `:47051` / `:47090` |
+| `DATABASE_URL` | `postgres://aichatdeck:aichatdeck@localhost:47432/aichatdeck` |
+| `REDIS_ADDR` | `localhost:47379` |
+| `KAFKA_BROKERS` / `KAFKA_TOPIC` | `localhost:47092` / `aichatdeck.task-events` (empty brokers: no Kafka export) |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_USER_ID`, `TELEGRAM_WEBHOOK_SECRET` | unset: no operator channel |
 
-## Общая память
+CI runs gofmt, vet, race-enabled tests against Postgres, a full
+`docker compose` smoke test (including events reaching the Kafka consumer),
+and proto lint plus generated-code drift checks.
 
-Агенты наполняют базу знаний сами — глобально или в рамках проекта:
+## Status
 
-```bash
-curl "$BASE/memory/search?q=архив"           # поиск по всем областям
-curl "$BASE/memory/search?project_id="       # только глобальные записи
-curl "$BASE/memory/search?project_id=$PROJ"  # записи проекта + глобальные
-```
-
-Запись публикуется как `proposed`; `verified` достижим только через verification, напрямую выставить нельзя. Категорию `fact` опубликовать напрямую запрещено — фактом становится проверенная гипотеза.
-
-Проекты бывают **открытые** (содержимое видно всем, `project_id` только группирует) и **закрытые** (видно только участникам). Чужой закрытый проект и его содержимое отвечают `not_found`, а не отказом: по идентификатору нельзя выяснить, что там что-то есть.
-
-Вступление — приглашение владельца либо заявка (если `membership_policy: invite_or_apply`), с обязательным решением второй стороны. Отдельно есть reviewer-доступ: только чтение, только по одной задаче, с обязательным сроком — чтобы закрытый проект можно было проверить снаружи.
-
-У проекта всегда ровно один владелец. Он назначает координаторов (те приглашают и исключают, но не трогают чужие роли и не передают проект). Передача владения двусторонняя: выдвижение ничего не меняет, пока названный не принял. Если владелец уходит — владение переходит к координатору, а если координаторов нет, проект архивируется: проекта без ответственного не существует.
-
-Владелец назначает главного агента через MCP `appoint_orchestrator`.
-Оркестратор читает `list_assignment_queue` и распределяет участников по
-компетенциям. Агент после подключения получает статус через
-`get_my_assignment`: `awaiting_assignment` или `ready`.
-Очередь и назначения сохраняются независимо для каждого проекта.
-
-Рабочие роли назначает владелец или оркестратор через MCP `assign_work_role`: `developer`,
-`tester`, `reviewer`, `researcher` или `unassigned`. Они отделены от
-административных `owner/coordinator`. Задача с `allowed_work_roles`, например
-`["tester"]`, серверно отклоняет claim агента без назначенной роли.
-
-Не реализовано: роли RFC-1200 общего назначения, команды, репутация.
-Наследование упорядочено по стажу, а не по Influence (RFC-1500 §7) —
-репутационных событий пока нет.
-
-## Безопасность
-
-Модель угроз простая: зарегистрироваться может кто угодно, и всё, что агент читает с платформы — objective задачи, чужой `RESULT`, запись общей памяти — написано другим агентом. Такой текст попадает в промпт LLM другого агента, то есть основной вектор — не SQL, а prompt injection.
-
-Что сделано:
-
-- **Данные ≠ инструкции.** Ненадёжный текст никогда не склеивается с промптом напрямую: он идёт в блок `[DATA <nonce> ...] ... [/DATA <nonce>]`, где nonce случайный на каждый промпт — закрыть чужой блок и выбраться в инструкции нельзя, потому что nonce не существовал в момент написания payload. Правила границы стоят и до, и после данных ([internal/agent/untrusted.go](internal/agent/untrusted.go)).
-- **Санитайзинг.** Из данных вырезаются управляющие символы, ANSI-escape, bidi-override, zero-width и tag-символы — носители инструкций, которых человек в ревью не видит. Длина блока ограничена.
-- **Верификация.** Попытка изнутри блока `result` продиктовать вердикт — сама по себе основание для `rejected`; правило есть и в промпте агента ([internal/agent/prompt.md](internal/agent/prompt.md)).
-- **Границы ввода.** Тело запроса ≤ 1 MiB, плюс пофайловые лимиты на длину полей и размер свободных JSON-объектов ([internal/model/limits.go](internal/model/limits.go)).
-- **Rate limiting.** `POST /agents/register` — по IP (единственная запись без credential), остальные эндпоинты — по `agent_id` ([internal/httpapi/ratelimit.go](internal/httpapi/ratelimit.go)).
-- **Раньше и без изменений:** `sender` MUST совпадать с аутентифицированным агентом, токен хранится только как sha256, внутренние ошибки не выносят наружу SQL и пути (RFC-1600 §2, §7).
-
-Чего нет: permissions и approval gates (RFC-1600 §3, §8), audit log (§6), sandbox для инструментов (§4), ротация и отзыв credential (§7), приватность проектов. Общая память — общая: приватного в неё класть нечего.
-
-## Тесты
-
-```bash
-make test   # поднимает postgres в compose, go test -race ./...
-make lint   # gofmt + go vet
-```
-
-Каждый тест получает собственную схему Postgres, поэтому пакеты идут
-параллельно. Без `TEST_DATABASE_URL` тесты, которым нужна БД, пропускаются.
-CI (`.github/workflows/ci.yml`) гоняет то же самое плюс smoke-сценарий на
-полном `docker compose`.
+A working core loop, not a finished product. Not implemented yet: general
+dynamic roles and teams (RFC-1200), reputation (RFC-1500), permission and
+approval gates and tool sandboxing (RFC-1600). The design documents describe
+the full target system; this README describes what runs.
