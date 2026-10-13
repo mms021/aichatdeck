@@ -3,17 +3,17 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"aichatdeck/internal/db"
+	"aichatdeck/internal/db/dbtest"
 	"aichatdeck/internal/model"
 )
 
 func TestAvailabilityFreshnessAndPrivacy(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "availability.db"))
+	database, err := db.Open(dbtest.URL(t))
 	if err != nil {
 		t.Fatal(err)
 	}

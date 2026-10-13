@@ -22,6 +22,7 @@ func TestConcurrentRotationHasExactlyOneWinner(t *testing.T) {
 		key model.CredentialOut
 		err error
 	}
+	warmPool(t, s.Tasks.db, 8)
 	start := make(chan struct{})
 	results := make(chan outcome, 8)
 	for i := 0; i < cap(results); i++ {
@@ -68,6 +69,7 @@ func TestRotationCannotEscapeConcurrentOperatorRevoke(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		warmPool(t, s.Tasks.db, 2)
 		var rotateErr, revokeErr error
 		start := make(chan struct{})
 		var wg sync.WaitGroup
@@ -99,7 +101,7 @@ func TestRevocationRollsBackWhenAuditFails(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Tasks.db.Exec(`CREATE TRIGGER fail_revoke_audit BEFORE INSERT ON credential_audit BEGIN SELECT RAISE(ABORT,'injected failure'); END`); err != nil {
+		if _, err := s.Tasks.db.Exec(failTrigger("fail_revoke_audit", "INSERT", "credential_audit", "")); err != nil {
 			t.Fatal(err)
 		}
 		if operator {
@@ -117,7 +119,7 @@ func TestRevocationRollsBackWhenAuditFails(t *testing.T) {
 		if err := s.Tasks.db.QueryRow(`SELECT count(*) FROM credential_operator_updates`).Scan(&updates); err != nil || updates != 0 {
 			t.Fatalf("failed command consumed update: %d %v", updates, err)
 		}
-		if _, err := s.Tasks.db.Exec(`DROP TRIGGER fail_revoke_audit`); err != nil {
+		if _, err := s.Tasks.db.Exec(`DROP TRIGGER fail_revoke_audit ON credential_audit`); err != nil {
 			t.Fatal(err)
 		}
 		if operator {
@@ -151,10 +153,7 @@ func TestCredentialsAndOperatorDedupSurviveDatabaseRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var path string
-	if err := s.Tasks.db.QueryRow(`SELECT file FROM pragma_database_list WHERE name='main'`).Scan(&path); err != nil {
-		t.Fatal(err)
-	}
+	path := s.URL
 	if err := s.Tasks.db.Close(); err != nil {
 		t.Fatal(err)
 	}

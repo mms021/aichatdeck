@@ -26,46 +26,12 @@ const platformSender = "platform"
 //
 // Returns the project and whether the caller may see its contents.
 func (s *Server) projectFor(r *http.Request, projectID, agentID string) (model.Project, bool, error) {
-	project, err := s.Projects.Get(r.Context(), projectID)
-	if err != nil {
-		return model.Project{}, false, err
-	}
-	if project.Visibility == model.ProjectOpen {
-		return project, true, nil
-	}
-
-	canRead, err := s.Members.CanRead(r.Context(), projectID, agentID)
-	if err != nil {
-		return model.Project{}, false, err
-	}
-	if canRead || project.Owner == agentID {
-		return project, true, nil
-	}
-	if project.Listed {
-		return project, false, nil
-	}
-	return model.Project{}, false, model.NotFound("project not found")
+	return s.App.ProjectFor(r.Context(), projectID, agentID)
 }
 
 // requireProjectWriter is the state-changing counterpart to projectFor.
-// Reviewer grants intentionally fail here: their narrow task visibility is
-// for inspection, never for publishing, claiming or mutating evidence.
 func (s *Server) requireProjectWriter(r *http.Request, projectID, agentID string) error {
-	project, err := s.Projects.Get(r.Context(), projectID)
-	if err != nil {
-		return err
-	}
-	if project.Status != model.ProjectActive {
-		return model.Conflict("cannot write to an archived project")
-	}
-	canWrite, err := s.Members.CanRead(r.Context(), projectID, agentID)
-	if err != nil {
-		return err
-	}
-	if !canWrite {
-		return model.AccessDenied("project access is read-only")
-	}
-	return nil
+	return s.App.RequireProjectWriter(r.Context(), projectID, agentID)
 }
 
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
@@ -376,7 +342,69 @@ func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if project.Visibility == model.ProjectOpen {
+		if _, err := s.Agents.Get(r.Context(), subjectID); err != nil {
+			s.writeErr(w, err)
+			return
+		}
+		if _, err := s.Members.Enroll(r.Context(), projectID, subjectID); err != nil {
+			s.writeErr(w, err)
+			return
+		}
+	}
 	member, err := s.Members.SetRole(r.Context(), projectID, subjectID, req.Role)
+	if err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, member)
+}
+
+// handleSetWorkRole assigns a server-enforced execution specialization. It
+// intentionally remains owner-only: coordinators organize work but cannot
+// broaden their own or others' execution authority.
+func (s *Server) handleSetWorkRole(w http.ResponseWriter, r *http.Request) {
+	callerID, _ := AgentIDFromContext(r.Context())
+	projectID, subjectID := r.PathValue("project_id"), r.PathValue("agent_id")
+	var req model.SetWorkRoleRequest
+	if err := decodeJSON(r, &req); err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	if err := req.Validate(); err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	project, err := s.Projects.Get(r.Context(), projectID)
+	if err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	if !s.isOrchestrator(r, project, callerID) {
+		s.writeErr(w, model.AccessDenied("only owner or orchestrator may assign work roles"))
+		return
+	}
+	if project.Status != model.ProjectActive {
+		s.writeErr(w, model.Conflict("project is archived"))
+		return
+	}
+	if project.Visibility == model.ProjectClosed {
+		m, err := s.Members.Get(r.Context(), projectID, subjectID)
+		if err != nil || m.Status != model.MemberActive {
+			s.writeErr(w, model.AccessDenied("subject must be an active member"))
+			return
+		}
+	}
+	if _, err := s.Agents.Get(r.Context(), subjectID); err != nil {
+		s.writeErr(w, err)
+		return
+	}
+	var member model.ProjectMembership
+	if project.Owner != callerID {
+		member, err = s.Members.AssignWithLease(r.Context(), projectID, callerID, subjectID, req.WorkRole, req.Generation)
+	} else {
+		member, err = s.Members.SetWorkRole(r.Context(), projectID, subjectID, req.WorkRole)
+	}
 	if err != nil {
 		s.writeErr(w, err)
 		return

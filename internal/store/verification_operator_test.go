@@ -23,7 +23,7 @@ func TestVerificationOperatorRetryAndAlerts(t *testing.T) {
 	if _, err := s.Tasks.RetryVerification(ctx, 1, task.TaskID); !model.IsCode(err, model.ErrConflict) {
 		t.Fatalf("reset live job: %v", err)
 	}
-	if _, err := s.Tasks.db.Exec(`UPDATE verification_jobs SET lease_until='' WHERE task_id=?`, task.TaskID); err != nil {
+	if _, err := s.Tasks.db.Exec(`UPDATE verification_jobs SET lease_until='-infinity' WHERE task_id=?`, task.TaskID); err != nil {
 		t.Fatal(err)
 	}
 	id, token, err := s.Tasks.ClaimVerificationAlert(ctx)
@@ -34,7 +34,7 @@ func TestVerificationOperatorRetryAndAlerts(t *testing.T) {
 		t.Fatalf("duplicate alert lease: %s %v", id, err)
 	}
 	// Simulate a failed send/restart by expiring the durable sending lease.
-	if _, err := s.Tasks.db.Exec(`UPDATE verification_alerts SET lease_until=''`); err != nil {
+	if _, err := s.Tasks.db.Exec(`UPDATE verification_alerts SET lease_until='-infinity'`); err != nil {
 		t.Fatal(err)
 	}
 	id, newToken, err := s.Tasks.ClaimVerificationAlert(ctx)
@@ -57,7 +57,7 @@ func TestVerificationOperatorRetryAndAlerts(t *testing.T) {
 	if fresh, err := s.Tasks.RetryVerification(ctx, 100, task.TaskID); err != nil || fresh {
 		t.Fatalf("duplicate update: %v %v", fresh, err)
 	}
-	if _, err := s.Tasks.db.Exec(`UPDATE verification_jobs SET attempts=5,lease_until=''`); err != nil {
+	if _, err := s.Tasks.db.Exec(`UPDATE verification_jobs SET attempts=5,lease_until='-infinity'`); err != nil {
 		t.Fatal(err)
 	}
 	if fresh, err := s.Tasks.RetryVerification(ctx, 100, task.TaskID); err != nil || fresh {

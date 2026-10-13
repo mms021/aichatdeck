@@ -4,15 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
 
-type ArtifactStore struct{ db *sql.DB }
+type ArtifactStore struct{ db *db.DB }
 
-func NewArtifactStore(db *sql.DB) *ArtifactStore { return &ArtifactStore{db: db} }
+func NewArtifactStore(d *db.DB) *ArtifactStore { return &ArtifactStore{db: d} }
 
 const artifactColumns = `artifact_id, schema_version, type, uri, checksum, created_by, task_id, project_id, size, retention, expires_at, created_at`
 
@@ -25,7 +25,7 @@ func (s *ArtifactStore) Create(ctx context.Context, createdBy string, req model.
 		retention = "permanent"
 	}
 	id := idgen.New("artifact")
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO artifacts (`+artifactColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -44,10 +44,10 @@ func (s *ArtifactStore) Get(ctx context.Context, viewer, id string) (model.Artif
 		`SELECT `+artifactColumns+` FROM artifacts WHERE artifact_id=? AND `+visibleScopeSQL("task_id"), args...)
 
 	var a model.Artifact
-	var taskID, projectID, expiresAt sql.NullString
-	var createdAtStr string
+	var taskID, projectID sql.NullString
+	var expiresAt sql.NullTime
 	err := row.Scan(&a.ArtifactID, &a.SchemaVersion, &a.Type, &a.URI, &a.Checksum, &a.CreatedBy,
-		&taskID, &projectID, &a.Size, &a.Retention, &expiresAt, &createdAtStr)
+		&taskID, &projectID, &a.Size, &a.Retention, &expiresAt, &a.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Artifact{}, model.NotFound("artifact not found")
@@ -60,13 +60,6 @@ func (s *ArtifactStore) Get(ctx context.Context, viewer, id string) (model.Artif
 	if projectID.Valid {
 		a.ProjectID = &projectID.String
 	}
-	if expiresAt.Valid {
-		if t, perr := time.Parse(time.RFC3339, expiresAt.String); perr == nil {
-			a.ExpiresAt = &t
-		}
-	}
-	if t, perr := time.Parse(time.RFC3339, createdAtStr); perr == nil {
-		a.CreatedAt = t
-	}
+	a.ExpiresAt = timePtr(expiresAt)
 	return a, nil
 }

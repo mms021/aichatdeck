@@ -20,8 +20,7 @@ func TestOperatorReplyAtomicAndDeduplicated(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Force a failure after message insertion: all effects must roll back.
-	_, err = s.Agents.db.Exec(`CREATE TRIGGER fail_answer BEFORE UPDATE ON operator_requests
- WHEN NEW.status='answered' BEGIN SELECT RAISE(ABORT,'test failure'); END`)
+	_, err = s.Agents.db.Exec(failTrigger("fail_answer", "UPDATE", "operator_requests", "WHEN (NEW.status='answered')"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +35,7 @@ func TestOperatorReplyAtomicAndDeduplicated(t *testing.T) {
 	if err != nil || got.Status != "sent" {
 		t.Fatalf("partial status: %v %v", got, err)
 	}
-	if _, err = s.Agents.db.Exec("DROP TRIGGER fail_answer"); err != nil {
+	if _, err = s.Agents.db.Exec("DROP TRIGGER fail_answer ON operator_requests"); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {

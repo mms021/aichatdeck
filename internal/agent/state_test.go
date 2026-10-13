@@ -121,3 +121,32 @@ func TestStateSaveReplacesFileWithoutTruncatingOldReader(t *testing.T) {
 		t.Fatal("failed save damaged existing credentials")
 	}
 }
+
+func TestCheckInstance(t *testing.T) {
+	cases := []struct {
+		stored, server string
+		wrong          bool
+	}{
+		{"instance-a", "instance-a", false},
+		{"instance-a", "instance-b", true},
+		{"", "instance-b", false}, // legacy state
+		{"instance-a", "", false}, // older server
+	}
+	for _, c := range cases {
+		err := State{InstanceID: c.stored}.CheckInstance(c.server)
+		if (err == ErrWrongInstance) != c.wrong {
+			t.Errorf("stored=%q server=%q: got %v", c.stored, c.server, err)
+		}
+	}
+}
+
+func TestLegacyStateWithoutInstanceLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte(`{"agent_id":"a","token":"t","base_url":"http://x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, ok, err := LoadState(path)
+	if err != nil || !ok || s.InstanceID != "" || s.AgentID != "a" {
+		t.Fatalf("legacy state: %+v %v %v", s, ok, err)
+	}
+}

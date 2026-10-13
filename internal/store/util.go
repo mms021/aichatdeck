@@ -1,10 +1,14 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"strconv"
 	"strings"
+	"time"
+
+	"aichatdeck/internal/db"
 )
 
 func toJSON(v any) string {
@@ -21,6 +25,17 @@ func fromJSON[T any](s string) T {
 		_ = json.Unmarshal([]byte(s), &v)
 	}
 	return v
+}
+
+// dbNow is the current time at the precision PostgreSQL stores, so a value
+// returned to the caller equals the one read back later.
+func dbNow() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }
+
+func timePtr(t sql.NullTime) *time.Time {
+	if !t.Valid {
+		return nil
+	}
+	return &t.Time
 }
 
 func orEmptySlice[T any](s []T) []T {
@@ -46,9 +61,7 @@ func nullIfEmpty(s string) any {
 	return s
 }
 
-func isUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
-}
+func isUniqueViolation(err error) bool { return db.IsUniqueViolation(err) }
 
 // encodeSeqCursor/decodeSeqCursor carry a monotonic insertion sequence — the
 // message inbox pages on that rather than on a timestamp, which is not unique
@@ -69,18 +82,22 @@ func decodeSeqCursor(cursor string) (int64, bool) {
 	return seq, true
 }
 
-func encodeCursor(ts, id string) string {
-	return base64.URLEncoding.EncodeToString([]byte(ts + "|" + id))
+func encodeCursor(ts time.Time, id string) string {
+	return base64.URLEncoding.EncodeToString([]byte(ts.UTC().Format(time.RFC3339Nano) + "|" + id))
 }
 
-func decodeCursor(cursor string) (ts, id string, ok bool) {
+func decodeCursor(cursor string) (ts time.Time, id string, ok bool) {
 	b, err := base64.URLEncoding.DecodeString(cursor)
 	if err != nil {
-		return "", "", false
+		return time.Time{}, "", false
 	}
 	parts := strings.SplitN(string(b), "|", 2)
 	if len(parts) != 2 {
-		return "", "", false
+		return time.Time{}, "", false
 	}
-	return parts[0], parts[1], true
+	ts, err = time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	return ts, parts[1], true
 }

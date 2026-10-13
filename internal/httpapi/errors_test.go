@@ -1,24 +1,24 @@
 package httpapi_test
 
 import (
-	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"aichatdeck/internal/bus"
 	"aichatdeck/internal/db"
+	"aichatdeck/internal/db/dbtest"
 	"aichatdeck/internal/httpapi"
 	"aichatdeck/internal/store"
 )
 
 // newBreakableServer hands back the underlying DB so a test can close it and
 // force a genuine internal failure.
-func newBreakableServer(t *testing.T) (*httptest.Server, *sql.DB) {
+func newBreakableServer(t *testing.T) (*httptest.Server, *db.DB) {
 	t.Helper()
-	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "errors.db"))
+	sqlDB, err := db.Open(dbtest.URL(t))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestInternalErrorsDoNotLeakDetail(t *testing.T) {
 	if msg != "internal error" {
 		t.Errorf("expected an opaque message, got %q", msg)
 	}
-	for _, leak := range []string{"sql", "sqlite", "database", ".db", "/"} {
+	for _, leak := range []string{"sql", "postgres", "pgx", "database", ".db", "/"} {
 		if strings.Contains(strings.ToLower(msg), leak) {
 			t.Errorf("internal detail %q leaked to the client: %q", leak, msg)
 		}
@@ -227,5 +227,23 @@ func TestRegistrationIsRateLimited(t *testing.T) {
 	}
 	if !limited {
 		t.Error("registration accepted 40 requests in a burst without limiting")
+	}
+}
+
+// The manifest reports the database identity and nothing that locates it.
+func TestManifestReportsInstanceIDOnly(t *testing.T) {
+	srv, sqlDB := newBreakableServer(t)
+	want, err := db.InstanceID(sqlDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anon := &client{t: t, base: srv.URL}
+	status, body := anon.do(http.MethodGet, "/manifest", nil)
+	if status != http.StatusOK || body["instance_id"] != want {
+		t.Fatalf("manifest %d instance_id=%v want %s", status, body["instance_id"], want)
+	}
+	raw, _ := json.Marshal(body)
+	if strings.Contains(string(raw), ".db") || strings.Contains(string(raw), "token") {
+		t.Fatalf("manifest leaks storage detail: %s", raw)
 	}
 }

@@ -5,15 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
-	"time"
+	"unicode"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
 
-type KnowledgeStore struct{ db *sql.DB }
+type KnowledgeStore struct{ db *db.DB }
 
-func NewKnowledgeStore(db *sql.DB) *KnowledgeStore { return &KnowledgeStore{db: db} }
+func NewKnowledgeStore(d *db.DB) *KnowledgeStore { return &KnowledgeStore{db: d} }
 
 const knowledgeColumns = `knowledge_id, schema_version, category, author, content, source, confidence, status, tags, refs, project_id, task_id, supersedes, superseded_by, version, created_at`
 
@@ -36,7 +37,7 @@ func (s *KnowledgeStore) Create(ctx context.Context, author string, req model.Cr
 		// Check mutation rights inside the transaction. Reviewer grants are
 		// read-only and must not authorize replacing an existing record.
 		args := append([]any{*req.Supersedes}, visibleScopeArgs(author, false)...)
-		err := tx.QueryRowContext(ctx, `SELECT version, superseded_by, project_id, task_id FROM knowledge WHERE knowledge_id=? AND `+visibleScopeSQL(""), args...).
+		err := tx.QueryRowContext(ctx, `SELECT version, superseded_by, project_id, task_id FROM knowledge WHERE knowledge_id=? AND `+visibleScopeSQL("")+` FOR UPDATE`, args...).
 			Scan(&prevVersion, &prevSupersededBy, &prevProject, &prevTask)
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Knowledge{}, model.NotFound("knowledge entry not found")
@@ -75,13 +76,13 @@ func (s *KnowledgeStore) Create(ctx context.Context, author string, req model.Cr
 	}
 
 	id := idgen.New("knowledge")
-	now := time.Now().UTC()
+	now := dbNow()
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO knowledge (`+knowledgeColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, "1.0", req.Category, author, toJSON(orEmptyMap(req.Content)), nullIfEmpty(req.Source),
 		req.Confidence, model.KnowledgeProposed, toJSON(orEmptySlice(req.Tags)),
 		toJSON(orEmptySlice(req.References)), nullableString(req.ProjectID), nullableString(req.TaskID),
-		nullableString(req.Supersedes), nil, version, now.Format(time.RFC3339),
+		nullableString(req.Supersedes), nil, version, now,
 	)
 	if err != nil {
 		return model.Knowledge{}, err
@@ -103,11 +104,11 @@ func (s *KnowledgeStore) Create(ctx context.Context, author string, req model.Cr
 
 func scanKnowledge(row interface{ Scan(...any) error }) (model.Knowledge, error) {
 	var k model.Knowledge
-	var contentJSON, tagsJSON, refsJSON, createdAtStr string
+	var contentJSON, tagsJSON, refsJSON string
 	var source, projectID, taskID, supersedes, supersededBy sql.NullString
 	err := row.Scan(&k.KnowledgeID, &k.SchemaVersion, &k.Category, &k.Author, &contentJSON, &source,
 		&k.Confidence, &k.Status, &tagsJSON, &refsJSON, &projectID, &taskID,
-		&supersedes, &supersededBy, &k.Version, &createdAtStr)
+		&supersedes, &supersededBy, &k.Version, &k.CreatedAt)
 	if err != nil {
 		return model.Knowledge{}, err
 	}
@@ -128,9 +129,6 @@ func scanKnowledge(row interface{ Scan(...any) error }) (model.Knowledge, error)
 	}
 	if supersededBy.Valid {
 		k.SupersededBy = &supersededBy.String
-	}
-	if t, perr := time.Parse(time.RFC3339, createdAtStr); perr == nil {
-		k.CreatedAt = t
 	}
 	return k, nil
 }
@@ -214,10 +212,21 @@ func (s *KnowledgeStore) Search(ctx context.Context, viewer string, filter model
 			args = append(args, *filter.ProjectID)
 		}
 	}
+	// A text query ranks by relevance instead of paging by time: agents ask
+	// for "what do we know about X" and need the best matches first.
+	terms := searchTerms(filter.Query)
 	if filter.Query != "" {
-		where = append(where, "(content LIKE ? OR tags LIKE ?)")
 		like := "%" + filter.Query + "%"
-		args = append(args, like, like)
+		if terms == "" {
+			where = append(where, "(content ILIKE ? OR tags ILIKE ?)")
+			args = append(args, like, like)
+		} else {
+			where = append(where, "(search @@ to_tsquery('russian', ?) OR content ILIKE ? OR tags ILIKE ?)")
+			args = append(args, terms, like, like)
+		}
+	}
+	if filter.Cursor != "" && terms != "" {
+		return nil, "", model.ValidationError("cursor cannot be combined with q: results are ranked, use limit")
 	}
 	if filter.Cursor != "" {
 		ts, id, ok := decodeCursor(filter.Cursor)
@@ -232,8 +241,13 @@ func (s *KnowledgeStore) Search(ctx context.Context, viewer string, filter model
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
 	}
-	q += " ORDER BY created_at, knowledge_id LIMIT ?"
-	args = append(args, limit+1)
+	if terms != "" {
+		q += " ORDER BY ts_rank_cd(search, to_tsquery('russian', ?)) DESC, created_at, knowledge_id LIMIT ?"
+		args = append(args, terms, limit)
+	} else {
+		q += " ORDER BY created_at, knowledge_id LIMIT ?"
+		args = append(args, limit+1)
+	}
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -256,7 +270,7 @@ func (s *KnowledgeStore) Search(ctx context.Context, viewer string, filter model
 	var nextCursor string
 	if len(out) > limit {
 		last := out[limit-1]
-		nextCursor = encodeCursor(last.CreatedAt.Format(time.RFC3339), last.KnowledgeID)
+		nextCursor = encodeCursor(last.CreatedAt, last.KnowledgeID)
 		out = out[:limit]
 	}
 
@@ -272,6 +286,15 @@ func (s *KnowledgeStore) Search(ctx context.Context, viewer string, filter model
 		out = filtered
 	}
 	return out, nextCursor, nil
+}
+
+// searchTerms turns free text into an OR tsquery of its words. Only letters
+// and digits survive, so user input can never smuggle tsquery operators.
+func searchTerms(q string) string {
+	words := strings.FieldsFunc(strings.ToLower(q), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	return strings.Join(words, " | ")
 }
 
 func nullableString(s *string) any {

@@ -10,6 +10,7 @@ const (
 	TaskSubmitted = "SUBMITTED"
 	TaskCompleted = "COMPLETED"
 	TaskFailed    = "FAILED"
+	TaskCancelled = "CANCELLED"
 )
 
 // CreateTaskRequest is the POST /tasks body (RFC-1800 Task example fields).
@@ -25,6 +26,7 @@ type CreateTaskRequest struct {
 	Deadline             *time.Time     `json:"deadline,omitempty"`
 	TeamID               *string        `json:"team_id,omitempty"`
 	ProjectID            *string        `json:"project_id,omitempty"`
+	AllowedWorkRoles     []string       `json:"allowed_work_roles,omitempty"`
 }
 
 func (r *CreateTaskRequest) Validate() *APIError {
@@ -51,6 +53,14 @@ func (r *CreateTaskRequest) Validate() *APIError {
 	if err := checkList("required_tools", r.RequiredTools, MaxListItems, MaxShortField); err != nil {
 		return err
 	}
+	for _, role := range r.AllowedWorkRoles {
+		if !ValidWorkRole(role) || role == WorkRoleUnassigned {
+			return ValidationError("allowed_work_roles contains an invalid role")
+		}
+	}
+	if err := checkList("allowed_work_roles", r.AllowedWorkRoles, MaxListItems, MaxShortField); err != nil {
+		return err
+	}
 	return checkObjectSize("context", r.Context)
 }
 
@@ -75,6 +85,7 @@ type Task struct {
 	LeaseExpiresAt       *time.Time     `json:"lease_expires_at"`
 	ClaimID              string         `json:"claim_id"`
 	SubmittedMessageID   string         `json:"submitted_message_id"`
+	AllowedWorkRoles     []string       `json:"allowed_work_roles"`
 }
 
 // TaskFilter is the GET /tasks query (RFC-1700 §4).

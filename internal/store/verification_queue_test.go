@@ -54,7 +54,7 @@ func TestVerificationQueueFencingAndRetry(t *testing.T) {
 		}
 	}
 	// A failed verdict write must roll back the job completion as well.
-	if _, err := s.Tasks.db.Exec(`CREATE TRIGGER fail_verdict BEFORE INSERT ON verifications BEGIN SELECT RAISE(ABORT,'test failure'); END`); err != nil {
+	if _, err := s.Tasks.db.Exec(failTrigger("fail_verdict", "INSERT", "verifications", "")); err != nil {
 		t.Fatal(err)
 	}
 	req.AttemptID = first.AttemptID
@@ -65,10 +65,10 @@ func TestVerificationQueueFencingAndRetry(t *testing.T) {
 	if err := s.Tasks.db.QueryRow(`SELECT attempt_id FROM verification_jobs WHERE task_id=?`, task.TaskID).Scan(&token); err != nil || token != first.AttemptID {
 		t.Fatalf("queue mutation not rolled back: %s %v", token, err)
 	}
-	if _, err := s.Tasks.db.Exec(`DROP TRIGGER fail_verdict`); err != nil {
+	if _, err := s.Tasks.db.Exec(`DROP TRIGGER fail_verdict ON verifications`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Tasks.db.Exec(`UPDATE verification_jobs SET lease_until='',next_at='' WHERE task_id=?`, task.TaskID); err != nil {
+	if _, err := s.Tasks.db.Exec(`UPDATE verification_jobs SET lease_until='-infinity',next_at='-infinity' WHERE task_id=?`, task.TaskID); err != nil {
 		t.Fatal(err)
 	}
 	second, err := s.Tasks.ClaimVerification(ctx, task.CreatedBy)
@@ -126,39 +126,22 @@ func TestVerificationQueueCrashAttemptLimit(t *testing.T) {
 	}
 }
 
-func TestVerificationQueueSurvivesRestartAndBackfills(t *testing.T) {
+func TestVerificationQueueSurvivesRestart(t *testing.T) {
 	s, task, _ := submittedFixture(t)
 	ctx := context.Background()
-	var path string
-	if err := s.Tasks.db.QueryRow(`SELECT file FROM pragma_database_list WHERE name='main'`).Scan(&path); err != nil {
-		t.Fatal(err)
-	}
-	// Simulate a pre-queue accepted task, then reopen the actual database file.
-	if _, err := s.Tasks.db.Exec(`DELETE FROM verification_jobs`); err != nil {
-		t.Fatal(err)
+	first, err := s.Tasks.ClaimVerification(ctx, task.CreatedBy)
+	if err != nil || first == nil {
+		t.Fatalf("claim: %+v %v", first, err)
 	}
 	if err := s.Tasks.db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := db.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	jobs := NewTaskStore(reopened)
-	first, err := jobs.ClaimVerification(ctx, task.CreatedBy)
-	if err != nil || first == nil {
-		reopened.Close()
-		t.Fatalf("backfill: %+v %v", first, err)
-	}
-	if err := reopened.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err = db.Open(path)
+	reopened, err := db.Open(s.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	jobs = NewTaskStore(reopened)
+	jobs := NewTaskStore(reopened)
 	if job, err := jobs.ClaimVerification(ctx, task.CreatedBy); err != nil || job != nil {
 		t.Fatalf("restart reset live lease: %+v %v", job, err)
 	}
@@ -213,7 +196,7 @@ func TestSubmissionAndQueueAreAtomic(t *testing.T) {
 	}
 	msg.MessageID, msg.TaskID = "atomic-result", task.TaskID
 	msg.Payload = []byte(toJSON(model.ResultPayload{Summary: "done", Status: "success", ClaimID: claim.ClaimID}))
-	if _, err := s.Tasks.db.Exec(`CREATE TRIGGER fail_enqueue BEFORE INSERT ON verification_jobs BEGIN SELECT RAISE(ABORT,'test failure'); END`); err != nil {
+	if _, err := s.Tasks.db.Exec(failTrigger("fail_enqueue", "INSERT", "verification_jobs", "")); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.Msgs.Insert(ctx, msg); err == nil {
@@ -226,7 +209,7 @@ func TestSubmissionAndQueueAreAtomic(t *testing.T) {
 	if err != nil || got.Status != model.TaskClaimed {
 		t.Fatalf("submission escaped rollback: %+v %v", got, err)
 	}
-	if _, err := s.Tasks.db.Exec(`DROP TRIGGER fail_enqueue`); err != nil {
+	if _, err := s.Tasks.db.Exec(`DROP TRIGGER fail_enqueue ON verification_jobs`); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.Msgs.Insert(ctx, msg); err != nil {

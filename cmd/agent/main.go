@@ -18,7 +18,7 @@ import (
 
 func main() {
 	var (
-		base      = flag.String("base", "http://localhost:8080", "platform base URL")
+		base      = flag.String("base", "http://localhost:47080", "platform base URL")
 		name      = flag.String("name", "agent", "agent name, reported as operator")
 		capsFlag  = flag.String("caps", "", "comma-separated capabilities")
 		toolsFlag = flag.String("tools", "", "comma-separated self-declared tool names")

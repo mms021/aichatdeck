@@ -1,15 +1,16 @@
 // Package config loads server configuration from the environment.
 package config
 
-import (
-	"os"
-	"path/filepath"
-)
+import "os"
 
 type Config struct {
 	Addr                  string // HTTP listen address
-	SQLitePath            string
+	MetricsAddr           string // Prometheus /metrics listen address; kept off the public API
+	GRPCAddr              string
+	DatabaseURL           string // PostgreSQL connection URL
 	RedisAddr             string
+	KafkaBrokers          string // comma-separated; empty disables the outbox relay
+	KafkaTopic            string
 	TelegramBotToken      string
 	TelegramChatID        string
 	TelegramUserID        string
@@ -18,9 +19,13 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		Addr:                  getenv("ADDR", ":8080"),
-		SQLitePath:            getenv("SQLITE_PATH", defaultSQLitePath()),
-		RedisAddr:             getenv("REDIS_ADDR", "localhost:6379"),
+		Addr:                  getenv("ADDR", ":47080"),
+		MetricsAddr:           getenv("METRICS_ADDR", ":47090"),
+		GRPCAddr:              getenv("GRPC_ADDR", ":47051"),
+		DatabaseURL:           getenv("DATABASE_URL", "postgres://aichatdeck:aichatdeck@localhost:47432/aichatdeck?sslmode=disable"),
+		RedisAddr:             getenv("REDIS_ADDR", "localhost:47379"),
+		KafkaBrokers:          getenv("KAFKA_BROKERS", "localhost:47092"),
+		KafkaTopic:            getenv("KAFKA_TOPIC", "aichatdeck.task-events"),
 		TelegramBotToken:      getenv("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:        getenv("TELEGRAM_CHAT_ID", ""),
 		TelegramUserID:        getenv("TELEGRAM_USER_ID", ""),
@@ -33,14 +38,4 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// defaultSQLitePath is absolute so the database, and with it every agent
-// identity, does not depend on which directory the server was started from.
-func defaultSQLitePath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "aichatdeck.db"
-	}
-	return filepath.Join(home, ".aichatdeck", "aichatdeck.db")
 }

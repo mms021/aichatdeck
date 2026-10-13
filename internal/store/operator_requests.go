@@ -5,15 +5,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
 
-type OperatorRequestStore struct{ db *sql.DB }
+type OperatorRequestStore struct{ db *db.DB }
 
-func NewOperatorRequestStore(db *sql.DB) *OperatorRequestStore { return &OperatorRequestStore{db: db} }
+func NewOperatorRequestStore(d *db.DB) *OperatorRequestStore { return &OperatorRequestStore{db: d} }
 
 // DeliverReply commits the inbox message and request status together. The
 // persisted update ID makes repeated reply deliveries harmless after restart.
@@ -43,7 +43,7 @@ func (s *OperatorRequestStore) DeliverReply(ctx context.Context, updateID, teleg
 	if err != nil {
 		return "", false, err
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 	_, err = tx.ExecContext(ctx, `INSERT INTO messages (message_id,protocol_version,type,sender,recipient,ts,priority,payload,reply_to,received_at)
  VALUES (?,'1.0','ANSWER','platform',?,?,'normal',?,?,?)`, messageID, record.AgentID, now, string(payload), record.RequestID, now)
 	if err != nil {
@@ -66,8 +66,9 @@ const operatorRequestColumns = `request_id, agent_id, kind, title, details, stat
 func scanOperatorRequest(row interface{ Scan(...any) error }) (model.OperatorRequestRecord, error) {
 	var record model.OperatorRequestRecord
 	var messageID sql.NullInt64
-	var reply, createdAt, answeredAt sql.NullString
-	err := row.Scan(&record.RequestID, &record.AgentID, &record.Kind, &record.Title, &record.Details, &record.Status, &messageID, &reply, &createdAt, &answeredAt)
+	var reply sql.NullString
+	var answeredAt sql.NullTime
+	err := row.Scan(&record.RequestID, &record.AgentID, &record.Kind, &record.Title, &record.Details, &record.Status, &messageID, &reply, &record.CreatedAt, &answeredAt)
 	if err != nil {
 		return model.OperatorRequestRecord{}, err
 	}
@@ -78,19 +79,12 @@ func scanOperatorRequest(row interface{ Scan(...any) error }) (model.OperatorReq
 	if reply.Valid {
 		record.Reply = reply.String
 	}
-	if value, err := time.Parse(time.RFC3339, createdAt.String); err == nil {
-		record.CreatedAt = value
-	}
-	if answeredAt.Valid {
-		if value, err := time.Parse(time.RFC3339, answeredAt.String); err == nil {
-			record.AnsweredAt = &value
-		}
-	}
+	record.AnsweredAt = timePtr(answeredAt)
 	return record, nil
 }
 
 func (s *OperatorRequestStore) Create(ctx context.Context, agentID string, req model.OperatorRequest) (model.OperatorRequestRecord, error) {
-	id, now := idgen.New("operator_request"), time.Now().UTC().Format(time.RFC3339)
+	id, now := idgen.New("operator_request"), dbNow()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO operator_requests (request_id, agent_id, kind, title, details, status, created_at) VALUES (?,?,?,?,?,'pending',?)`, id, agentID, req.Kind, req.Title, req.Details, now)
 	if err != nil {
 		return model.OperatorRequestRecord{}, err
@@ -125,7 +119,7 @@ func (s *OperatorRequestStore) ByTelegramMessage(ctx context.Context, messageID 
 }
 
 func (s *OperatorRequestStore) Answer(ctx context.Context, id, reply string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE operator_requests SET status='answered', reply=?, answered_at=? WHERE request_id=?`, reply, time.Now().UTC().Format(time.RFC3339), id)
+	_, err := s.db.ExecContext(ctx, `UPDATE operator_requests SET status='answered', reply=?, answered_at=? WHERE request_id=?`, reply, dbNow(), id)
 	return err
 }
 

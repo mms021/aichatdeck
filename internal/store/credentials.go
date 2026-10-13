@@ -6,15 +6,15 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
 
-type CredentialStore struct{ db *sql.DB }
+type CredentialStore struct{ db *db.DB }
 
-func NewCredentialStore(db *sql.DB) *CredentialStore { return &CredentialStore{db: db} }
+func NewCredentialStore(d *db.DB) *CredentialStore { return &CredentialStore{db: d} }
 
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
@@ -28,7 +28,7 @@ func (s *CredentialStore) Issue(ctx context.Context, agentID string) (model.Cred
 	credID := idgen.New("credential")
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO credentials (credential_id, agent_id, token_hash, status, issued_at) VALUES (?,?,?,?,?)`,
-		credID, agentID, hashToken(token), "active", time.Now().UTC().Format(time.RFC3339),
+		credID, agentID, hashToken(token), "active", dbNow(),
 	)
 	if err != nil {
 		return model.CredentialOut{}, err
@@ -61,15 +61,20 @@ func (s *CredentialStore) Rotate(ctx context.Context, token string) (model.Crede
 		return model.CredentialOut{}, err
 	}
 	defer tx.Rollback()
+	// Lock order everywhere: agent row, then credential rows. RevokeAgent
+	// holds the agent row too, so a rotation cannot mint a key its UPDATE misses.
+	if err := lockAgentByToken(ctx, tx, token); err != nil {
+		return model.CredentialOut{}, err
+	}
 	var agentID, oldID string
-	if err := tx.QueryRowContext(ctx, `SELECT agent_id,credential_id FROM credentials WHERE token_hash=? AND status='active'`, hashToken(token)).Scan(&agentID, &oldID); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT agent_id,credential_id FROM credentials WHERE token_hash=? AND status='active' FOR UPDATE`, hashToken(token)).Scan(&agentID, &oldID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return model.CredentialOut{}, err
 		}
 		return model.CredentialOut{}, model.Conflict("credential is no longer active")
 	}
 	out := model.CredentialOut{CredentialID: idgen.New("credential"), Token: idgen.Token()}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 	if _, err = tx.ExecContext(ctx, `UPDATE credentials SET status='revoked' WHERE credential_id=?`, oldID); err != nil {
 		return model.CredentialOut{}, err
 	}
@@ -82,8 +87,17 @@ func (s *CredentialStore) Rotate(ctx context.Context, token string) (model.Crede
 	return out, tx.Commit()
 }
 
-func credentialAudit(ctx context.Context, tx *sql.Tx, actor, agentID, credentialID, action string) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO credential_audit(event_id,actor,agent_id,credential_id,action,created_at) VALUES(?,?,?,?,?,?)`, idgen.New("credential-event"), actor, agentID, credentialID, action, time.Now().UTC().Format(time.RFC3339))
+func lockAgentByToken(ctx context.Context, tx *db.Tx, token string) error {
+	var agentID string
+	err := tx.QueryRowContext(ctx, `SELECT a.agent_id FROM credentials c JOIN agents a ON a.agent_id=c.agent_id WHERE c.token_hash=? FOR UPDATE OF a`, hashToken(token)).Scan(&agentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Conflict("credential is no longer active")
+	}
+	return err
+}
+
+func credentialAudit(ctx context.Context, tx *db.Tx, actor, agentID, credentialID, action string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO credential_audit(event_id,actor,agent_id,credential_id,action,created_at) VALUES(?,?,?,?,?,?)`, idgen.New("credential-event"), actor, agentID, credentialID, action, dbNow())
 	return err
 }
 
@@ -93,8 +107,13 @@ func (s *CredentialStore) RevokeCurrent(ctx context.Context, token string) error
 		return err
 	}
 	defer tx.Rollback()
+	// Lock order everywhere: agent row, then credential rows. RevokeAgent
+	// holds the agent row too, so a rotation cannot mint a key its UPDATE misses.
+	if err := lockAgentByToken(ctx, tx, token); err != nil {
+		return err
+	}
 	var agentID, credID string
-	if err := tx.QueryRowContext(ctx, `SELECT agent_id,credential_id FROM credentials WHERE token_hash=? AND status='active'`, hashToken(token)).Scan(&agentID, &credID); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT agent_id,credential_id FROM credentials WHERE token_hash=? AND status='active' FOR UPDATE`, hashToken(token)).Scan(&agentID, &credID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -127,7 +146,7 @@ func (s *CredentialStore) RevokeAgent(ctx context.Context, updateID int64, agent
 	if !errors.Is(err, sql.ErrNoRows) {
 		return false, err
 	}
-	if err = tx.QueryRowContext(ctx, `SELECT agent_id FROM agents WHERE agent_id=?`, agentID).Scan(&prior); errors.Is(err, sql.ErrNoRows) {
+	if err = tx.QueryRowContext(ctx, `SELECT agent_id FROM agents WHERE agent_id=? FOR UPDATE`, agentID).Scan(&prior); errors.Is(err, sql.ErrNoRows) {
 		return false, model.NotFound("agent not found")
 	} else if err != nil {
 		return false, err
@@ -138,7 +157,7 @@ func (s *CredentialStore) RevokeAgent(ctx context.Context, updateID int64, agent
 	if err = credentialAudit(ctx, tx, "telegram-operator", agentID, "*", "revoked_all"); err != nil {
 		return false, err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO credential_operator_updates(update_id,agent_id,created_at) VALUES(?,?,?)`, updateID, agentID, time.Now().UTC().Format(time.RFC3339)); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO credential_operator_updates(update_id,agent_id,created_at) VALUES(?,?,?)`, updateID, agentID, dbNow()); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()

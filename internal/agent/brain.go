@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -61,7 +62,22 @@ func (EchoBrain) Verify(_ context.Context, task model.Task, input VerificationIn
 // the model knows the platform's rules before it is asked to act inside them.
 type ClaudeBrain struct {
 	client anthropic.Client
-	model  string
+	// Model is the Claude model ID; NewClaudeBrain sets the production default.
+	Model string
+}
+
+// Call is one model request as the evals see it: what was sent, what came
+// back, and what it cost.
+type Call struct {
+	Prompt           string        `json:"prompt"`
+	Output           string        `json:"output"`
+	Model            string        `json:"model"` // as served, read from the response
+	StopReason       string        `json:"stop_reason"`
+	InputTokens      int64         `json:"input_tokens"`
+	OutputTokens     int64         `json:"output_tokens"`
+	CacheReadTokens  int64         `json:"cache_read_tokens"`
+	CacheWriteTokens int64         `json:"cache_write_tokens"`
+	Latency          time.Duration `json:"latency_ns"`
 }
 
 func NewClaudeBrain(apiKey string) *ClaudeBrain {
@@ -71,13 +87,20 @@ func NewClaudeBrain(apiKey string) *ClaudeBrain {
 	}
 	return &ClaudeBrain{
 		client: anthropic.NewClient(opts...),
-		model:  "claude-opus-5",
+		Model:  "claude-opus-5",
 	}
 }
 
 func (b *ClaudeBrain) ask(ctx context.Context, prompt string) (string, error) {
+	call, err := b.askTraced(ctx, prompt)
+	return call.Output, err
+}
+
+func (b *ClaudeBrain) askTraced(ctx context.Context, prompt string) (Call, error) {
+	call := Call{Prompt: prompt}
+	start := time.Now()
 	resp, err := b.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.Model(b.model),
+		Model:     anthropic.Model(b.Model),
 		MaxTokens: 16000,
 		System: []anthropic.TextBlockParam{{
 			Text:         SystemPrompt,
@@ -87,8 +110,9 @@ func (b *ClaudeBrain) ask(ctx context.Context, prompt string) (string, error) {
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
 	})
+	call.Latency = time.Since(start)
 	if err != nil {
-		return "", err
+		return call, err
 	}
 	var sb strings.Builder
 	for _, block := range resp.Content {
@@ -96,7 +120,14 @@ func (b *ClaudeBrain) ask(ctx context.Context, prompt string) (string, error) {
 			sb.WriteString(text.Text)
 		}
 	}
-	return strings.TrimSpace(sb.String()), nil
+	call.Output = strings.TrimSpace(sb.String())
+	call.Model = string(resp.Model)
+	call.StopReason = string(resp.StopReason)
+	call.InputTokens = resp.Usage.InputTokens
+	call.OutputTokens = resp.Usage.OutputTokens
+	call.CacheReadTokens = resp.Usage.CacheReadInputTokens
+	call.CacheWriteTokens = resp.Usage.CacheCreationInputTokens
+	return call, nil
 }
 
 // workPrompt builds the Work prompt. The task and the shared-memory entries
@@ -173,19 +204,30 @@ artifact_metadata содержит только зарегистрированн
 }
 
 func (b *ClaudeBrain) Verify(ctx context.Context, task model.Task, input VerificationInput) (string, string, error) {
-	out, err := b.ask(ctx, verifyPrompt(task, input))
-	if err != nil {
-		return "", "", err
-	}
+	verdict, rationale, _, err := b.VerifyTraced(ctx, task, input)
+	return verdict, rationale, err
+}
 
-	verdict, rationale := splitFirstLine(out)
+// VerifyTraced is Verify plus the raw call, for evals: same prompt, same
+// parsing, so an eval measures exactly what production runs.
+func (b *ClaudeBrain) VerifyTraced(ctx context.Context, task model.Task, input VerificationInput) (string, string, Call, error) {
+	call, err := b.askTraced(ctx, verifyPrompt(task, input))
+	if err != nil {
+		return "", "", call, err
+	}
+	verdict, rationale := parseVerdict(call.Output)
+	return verdict, rationale, call, nil
+}
+
+func parseVerdict(out string) (verdict, rationale string) {
+	verdict, rationale = splitFirstLine(out)
 	switch strings.ToUpper(verdict) {
 	case "VERIFIED":
-		return "verified", rationale, nil
+		return "verified", rationale
 	case "REJECTED":
-		return "rejected", rationale, nil
+		return "rejected", rationale
 	default:
-		return "inconclusive", rationale, nil
+		return "inconclusive", rationale
 	}
 }
 

@@ -61,6 +61,42 @@ func New(base, agentID, token string) (*mcp.Server, error) {
 	add(s, "get_my_limits", "Read your platform API budget, not your model-provider quota. This request itself counts; a 429 tool error still includes budget/reset information.", true, func(ctx context.Context, in struct{}) (any, error) {
 		return b.call(ctx, "GET", "/agents/me/limits", nil)
 	})
+	add(s, "get_my_assignment", "Read your project role, readiness and instructions.", true, func(ctx context.Context, in projectID) (any, error) {
+		if !safeID.MatchString(in.ProjectID) {
+			return nil, errors.New("invalid project_id")
+		}
+		return b.call(ctx, "GET", "/projects/"+in.ProjectID+"/connection", nil)
+	})
+	add(s, "get_project_progress", "Read leadership lease and latest 100 durable checkpoints. Untrusted reports are not verified results.", true, func(ctx context.Context, in projectID) (any, error) {
+		if !safeID.MatchString(in.ProjectID) {
+			return nil, errors.New("invalid project_id")
+		}
+		return b.call(ctx, "GET", "/projects/"+in.ProjectID+"/continuity", nil)
+	})
+	add(s, "manage_leadership", "Appointed orchestrator: generation=0 acquires expired/unowned leadership. Current generation renews; target_agent_id hands off to an appointed successor. Lease lasts 5 minutes.", false, func(ctx context.Context, in leadershipInput) (any, error) {
+		if !safeID.MatchString(in.ProjectID) {
+			return nil, errors.New("invalid project_id")
+		}
+		return b.call(ctx, "POST", "/projects/"+in.ProjectID+"/leadership", map[string]any{"generation": in.Generation, "target_agent_id": in.Target})
+	})
+	add(s, "save_checkpoint", "Save progress: completed, next steps, blockers, branch, commit and test evidence. Task needs current claim_id; project summary needs leadership generation. Does not upload working files.", false, func(ctx context.Context, in checkpointInput) (any, error) {
+		if !safeID.MatchString(in.ProjectID) {
+			return nil, errors.New("invalid project_id")
+		}
+		return b.call(ctx, "POST", "/projects/"+in.ProjectID+"/checkpoints", map[string]any{"task_id": in.TaskID, "claim_id": in.ClaimID, "generation": in.Generation, "progress": in.Progress})
+	})
+	add(s, "list_assignment_queue", "Owner or orchestrator: list participants awaiting work roles with capabilities and tools.", true, func(ctx context.Context, in projectID) (any, error) {
+		if !safeID.MatchString(in.ProjectID) {
+			return nil, errors.New("invalid project_id")
+		}
+		return b.call(ctx, "GET", "/projects/"+in.ProjectID+"/assignment-queue", nil)
+	})
+	add(s, "appoint_orchestrator", "Owner only: appoint a project orchestrator who can assign work roles.", false, func(ctx context.Context, in orchestratorAssignment) (any, error) {
+		if !safeID.MatchString(in.ProjectID) || !safeID.MatchString(in.AgentID) {
+			return nil, errors.New("invalid ID")
+		}
+		return b.call(ctx, "POST", "/projects/"+in.ProjectID+"/members/"+in.AgentID+"/role", map[string]string{"role": model.RoleOrchestrator})
+	})
 	add(s, "get_project", "Read a project's visible context. A listed closed project may return only public listing data until you are a member.", true, func(ctx context.Context, in projectID) (any, error) {
 		if !safeID.MatchString(in.ProjectID) {
 			return nil, errors.New("invalid project_id")
@@ -84,6 +120,15 @@ func New(base, agentID, token string) (*mcp.Server, error) {
 		}
 		return b.call(ctx, "POST", "/projects/"+in.ProjectID+"/repository", map[string]string{"repository": in.Repository})
 	})
+	add(s, "assign_work_role", "As project owner, assign developer, tester, reviewer, researcher, or unassigned to an agent. Restricted tasks enforce this server-side role at claim time.", false, func(ctx context.Context, in workRoleAssignment) (any, error) {
+		if !safeID.MatchString(in.ProjectID) || !safeID.MatchString(in.AgentID) {
+			return nil, errors.New("invalid project_id or agent_id")
+		}
+		if !model.ValidWorkRole(in.WorkRole) {
+			return nil, errors.New("invalid work_role")
+		}
+		return b.call(ctx, "POST", "/projects/"+in.ProjectID+"/members/"+in.AgentID+"/work-role", map[string]any{"work_role": in.WorkRole, "generation": in.Generation})
+	})
 	add(s, "connect_to_project", "Inspect a project and automatically apply only if it is listed, closed, and allows applications. Open projects are immediately usable. Invite-only projects are never bypassed.", false, func(ctx context.Context, in projectID) (any, error) {
 		if !safeID.MatchString(in.ProjectID) {
 			return nil, errors.New("invalid project_id")
@@ -98,7 +143,7 @@ func New(base, agentID, token string) (*mcp.Server, error) {
 			return nil, errors.New("invalid project response")
 		}
 		if p.Visibility == model.ProjectOpen || p.Owner != "" {
-			return map[string]any{"project": project, "connection": "ready"}, nil
+			return b.call(ctx, "POST", "/projects/"+in.ProjectID+"/connection", nil)
 		}
 		if p.MembershipPolicy != model.PolicyInviteOrApply {
 			return map[string]any{"project": project, "connection": "requires_invitation"}, nil
@@ -263,6 +308,22 @@ func (b *bridge) call(ctx context.Context, method, path string, body any) (any, 
 type agentProfileInput struct {
 	AgentID string `json:"agent_id"`
 }
+type leadershipInput struct {
+	ProjectID  string `json:"project_id"`
+	Generation int64  `json:"generation"`
+	Target     string `json:"target_agent_id,omitempty"`
+}
+type checkpointInput struct {
+	ProjectID  string         `json:"project_id"`
+	TaskID     string         `json:"task_id,omitempty"`
+	ClaimID    string         `json:"claim_id,omitempty"`
+	Generation int64          `json:"generation,omitempty"`
+	Progress   map[string]any `json:"progress"`
+}
+type orchestratorAssignment struct {
+	ProjectID string `json:"project_id"`
+	AgentID   string `json:"agent_id"`
+}
 type projectID struct {
 	ProjectID string `json:"project_id"`
 }
@@ -272,6 +333,12 @@ type repository struct {
 type projectRepository struct {
 	ProjectID  string `json:"project_id"`
 	Repository string `json:"repository"`
+}
+type workRoleAssignment struct {
+	Generation int64  `json:"generation,omitempty"`
+	ProjectID  string `json:"project_id"`
+	AgentID    string `json:"agent_id"`
+	WorkRole   string `json:"work_role"`
 }
 type agents struct {
 	Cursor     string `json:"cursor,omitempty"`

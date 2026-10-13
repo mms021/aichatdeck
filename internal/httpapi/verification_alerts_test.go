@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"aichatdeck/internal/db"
+	"aichatdeck/internal/db/dbtest"
 	"aichatdeck/internal/model"
 	"aichatdeck/internal/store"
 )
@@ -33,7 +33,7 @@ func (m *alertMessenger) Send(_ context.Context, text string) (int64, error) {
 
 func TestVerificationAlertsAndAuthorizedRetry(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(filepath.Join(t.TempDir(), "alerts.db"))
+	database, err := db.Open(dbtest.URL(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestVerificationAlertsAndAuthorizedRetry(t *testing.T) {
 	if _, _, err := store.NewMessageStore(database).Insert(ctx, model.Envelope{MessageID: "result", Type: "RESULT", Sender: worker.AgentID, Recipient: creator.AgentID, TaskID: task.TaskID, Payload: payload}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Exec(`UPDATE verification_jobs SET attempts=5,lease_until=''`); err != nil {
+	if _, err := database.Exec(`UPDATE verification_jobs SET attempts=5,lease_until='-infinity'`); err != nil {
 		t.Fatal(err)
 	}
 	messenger := &alertMessenger{fail: true}
@@ -68,7 +68,7 @@ func TestVerificationAlertsAndAuthorizedRetry(t *testing.T) {
 	if err := s.sendVerificationAlerts(ctx); err == nil {
 		t.Fatal("failed notification acknowledged")
 	}
-	if _, err := database.Exec(`UPDATE verification_alerts SET lease_until=''`); err != nil {
+	if _, err := database.Exec(`UPDATE verification_alerts SET lease_until='-infinity'`); err != nil {
 		t.Fatal(err)
 	}
 	messenger.fail = false

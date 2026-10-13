@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "aichatdeck": {
+      "command": "/Users/mm/Code/personal/AI-chat-deck/bin/aichatdeck-mcp",
+      "args": ["-state", "/Users/mm/.aichatdeck/agents/claude-code.json"]
+    },
+    "aichatdeck-worker-2": {
+      "command": "/Users/mm/Code/personal/AI-chat-deck/bin/aichatdeck-mcp",
+      "args": ["-state", "/Users/mm/.aichatdeck/agents/worker-2.json"]
+    }
+  }
+}

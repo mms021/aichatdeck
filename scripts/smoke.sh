@@ -2,22 +2,23 @@
 # Manual walkthrough of the Core Loop against a running `cmd/server` + real
 # Redis. Not a substitute for `go test ./...` (internal/httpapi/e2e_test.go
 # is the self-checking version of this same scenario) — just a human sanity
-# script. Requires: server running on $BASE (default localhost:8080), curl, jq.
+# script. Requires: server running on $BASE (default localhost:47080), curl, jq.
 set -euo pipefail
 
-BASE="${BASE:-http://localhost:8080}"
+BASE="${BASE:-http://localhost:47080}"
+RUN="$(date +%s)-$$"
 
 echo "== health =="
 curl -sf "$BASE/health" | jq .
 
 echo "== register agent A (creator/verifier) =="
-A=$(curl -sf -X POST "$BASE/agents/register" -d '{}')
+A=$(curl -sf -X POST "$BASE/agents/register" -d '{"capabilities":[{"name":"testing"}]}')
 A_ID=$(echo "$A" | jq -r .agent_id)
 A_TOKEN=$(echo "$A" | jq -r .credential.token)
 echo "agent A: $A_ID"
 
 echo "== register agent B (claimer/result sender) =="
-B=$(curl -sf -X POST "$BASE/agents/register" -d '{}')
+B=$(curl -sf -X POST "$BASE/agents/register" -d '{"capabilities":[{"name":"testing"}]}')
 B_ID=$(echo "$B" | jq -r .agent_id)
 B_TOKEN=$(echo "$B" | jq -r .credential.token)
 echo "agent B: $B_ID"
@@ -36,7 +37,7 @@ CLAIM_ID=$(echo "$CLAIM" | jq -r .claim_id)
 
 echo "== B posts a RESULT message =="
 curl -sf -X POST "$BASE/messages" -H "Authorization: Bearer $B_TOKEN" -d "{
-  \"message_id\": \"smoke-result-1\",
+  \"message_id\": \"smoke-result-$RUN\",
   \"protocol_version\": \"1.0\",
   \"type\": \"RESULT\",
   \"sender\": \"$B_ID\",
@@ -51,10 +52,12 @@ echo "== A long-polls for it (should return promptly, not wait the full 30s) =="
 time curl -sf "$BASE/messages?wait_seconds=30" -H "Authorization: Bearer $A_TOKEN" | jq .
 
 echo "== A verifies the RESULT =="
-curl -sf -X POST "$BASE/tasks/$TASK_ID/verify" -H "Authorization: Bearer $A_TOKEN" -d '{
-  "target_message_id": "smoke-result-1",
-  "verdict": "verified"
-}' | jq .
+curl -sf -X POST "$BASE/tasks/$TASK_ID/verify" -H "Authorization: Bearer $A_TOKEN" -d "{
+  \"target_message_id\": \"smoke-result-$RUN\",
+  \"verdict\": \"verified\"
+}" | jq .
 
 echo "== confirm task is COMPLETED =="
-curl -sf "$BASE/tasks/$TASK_ID" -H "Authorization: Bearer $A_TOKEN" | jq .status
+STATUS=$(curl -sf "$BASE/tasks/$TASK_ID" -H "Authorization: Bearer $A_TOKEN" | jq -r .status)
+echo "$STATUS"
+[ "$STATUS" = "COMPLETED" ]

@@ -4,7 +4,6 @@ package httpapi
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -13,8 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"aichatdeck/internal/app"
 	"aichatdeck/internal/bus"
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
+	"aichatdeck/internal/metrics"
 	"aichatdeck/internal/model"
 	"aichatdeck/internal/store"
 )
@@ -34,13 +36,17 @@ type Server struct {
 	Projects              *store.ProjectStore
 	Members               *store.MembershipStore
 	Bus                   bus.Bus
-	DB                    *sql.DB
+	DB                    *db.DB
 	RedisPinger           Pinger
 	Logger                *log.Logger // nil silences server-side logging (tests)
 	OperatorNotifier      OperatorNotifier
 	OperatorRequests      *store.OperatorRequestStore
 	TelegramUserID        string
 	TelegramWebhookSecret string
+
+	// App holds the transport-agnostic use-cases. NewRouter builds it from
+	// the stores above when unset; cmd/server shares it with gRPC.
+	App *app.App
 
 	// Rate-limit state, per router (see NewRouter).
 	registerLimit *limiter
@@ -56,6 +62,10 @@ type TelegramMessenger interface {
 }
 
 func NewRouter(s *Server) http.Handler {
+	if s.App == nil {
+		s.App = &app.App{Agents: s.Agents, Credentials: s.Credentials, Tasks: s.Tasks, Messages: s.Messages,
+			Artifacts: s.Artifacts, Projects: s.Projects, Members: s.Members, Bus: s.Bus}
+	}
 	s.registerLimit = newLimiter(registerPerMinute, time.Minute)
 	s.agentLimit = newLimiter(agentPerMinute, time.Minute)
 
@@ -85,6 +95,7 @@ func NewRouter(s *Server) http.Handler {
 	mux.HandleFunc("GET /tasks", s.RequireAuth(s.handleListTasks))
 	mux.HandleFunc("GET /tasks/{task_id}", s.RequireAuth(s.handleGetTask))
 	mux.HandleFunc("POST /tasks/{task_id}/claim", s.RequireAuth(s.handleClaimTask))
+	mux.HandleFunc("POST /tasks/{task_id}/cancel", s.RequireAuth(s.handleCancelTask))
 	mux.HandleFunc("POST /tasks/{task_id}/heartbeat", s.RequireAuth(s.handleHeartbeatTask))
 	mux.HandleFunc("POST /tasks/{task_id}/verify", s.RequireAuth(s.handleVerifyTask))
 	mux.HandleFunc("POST /verification/claim", s.RequireAuth(s.handleClaimVerification))
@@ -109,10 +120,17 @@ func NewRouter(s *Server) http.Handler {
 	mux.HandleFunc("POST /projects/{project_id}/members/{agent_id}/decide", s.RequireAuth(s.handleDecideMembership))
 	mux.HandleFunc("DELETE /projects/{project_id}/members/{agent_id}", s.RequireAuth(s.handleRemoveMembership))
 	mux.HandleFunc("POST /projects/{project_id}/members/{agent_id}/role", s.RequireAuth(s.handleSetRole))
+	mux.HandleFunc("POST /projects/{project_id}/members/{agent_id}/work-role", s.RequireAuth(s.handleSetWorkRole))
+	mux.HandleFunc("POST /projects/{project_id}/connection", s.RequireAuth(s.handleProjectConnection))
+	mux.HandleFunc("GET /projects/{project_id}/connection", s.RequireAuth(s.handleProjectConnection))
+	mux.HandleFunc("GET /projects/{project_id}/assignment-queue", s.RequireAuth(s.handleAssignmentQueue))
+	mux.HandleFunc("GET /projects/{project_id}/continuity", s.RequireAuth(s.handleLeadership))
+	mux.HandleFunc("POST /projects/{project_id}/leadership", s.RequireAuth(s.handleLeadership))
+	mux.HandleFunc("POST /projects/{project_id}/checkpoints", s.RequireAuth(s.handleSaveProgress))
 	mux.HandleFunc("POST /projects/{project_id}/transfer", s.RequireAuth(s.handleTransfer))
 	mux.HandleFunc("POST /projects/{project_id}/transfer/decide", s.RequireAuth(s.handleDecideTransfer))
 
-	return s.recoverPanics(limitBodies(mux))
+	return s.recoverPanics(limitBodies(metrics.Middleware(mux)))
 }
 
 // maxBodyBytes caps every request body. Nothing downstream streams: each
@@ -187,9 +205,11 @@ func (s *Server) writeErr(w http.ResponseWriter, err error) {
 	traceID := idgen.New("trace")
 	var apiErr *model.APIError
 	if errors.As(err, &apiErr) {
+		metrics.APIErrors.WithLabelValues(apiErr.ErrorCode).Inc()
 		model.WriteError(w, traceID, apiErr)
 		return
 	}
+	metrics.APIErrors.WithLabelValues("internal").Inc()
 	s.logf("internal error [%s]: %v", traceID, err)
 	model.WriteError(w, traceID, model.Internal())
 }

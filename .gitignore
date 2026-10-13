@@ -2,3 +2,6 @@
 *.db
 *.db-shm
 *.db-wal
+bin/
+evals/runs/
+deploy/langfuse/docker-compose.yml

@@ -1,0 +1,42 @@
+# Local Langfuse for eval runs, layered over the upstream compose file that
+# `make langfuse` downloads (pinned release). Infra ports stay unpublished so
+# the stack runs next to other local Postgres/Redis; the UI is on 47400.
+# Credentials below are for this throwaway local instance only.
+services:
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:4.58.0
+    ports: !reset []
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:4.58.0
+    ports: !override ["127.0.0.1:47400:3000"]
+    environment:
+      NEXTAUTH_URL: http://localhost:47400
+      LANGFUSE_INIT_ORG_ID: eval-org
+      LANGFUSE_INIT_ORG_NAME: eval
+      LANGFUSE_INIT_PROJECT_ID: aichatdeck-evals
+      LANGFUSE_INIT_PROJECT_NAME: aichatdeck-evals
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-local-eval
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-local-eval
+      LANGFUSE_INIT_USER_EMAIL: eval@example.test
+      LANGFUSE_INIT_USER_NAME: eval
+      LANGFUSE_INIT_USER_PASSWORD: local-eval-only-123
+  clickhouse:
+    ports: !reset []
+  # Local stand-in for MinIO, whose public images are gone: an S3 mock with
+  # the "langfuse" bucket pre-created. For a local exporter check only.
+  minio:
+    image: adobe/s3mock:4.7.0
+    entrypoint: !reset null
+    command: !reset null
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: langfuse
+    volumes: !reset []
+    ports: !reset []
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9090"]
+      interval: 2s
+      retries: 30
+  redis:
+    ports: !reset []
+  postgres:
+    ports: !reset []

@@ -4,15 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
 
-type AgentStore struct{ db *sql.DB }
+type AgentStore struct{ db *db.DB }
 
-func NewAgentStore(db *sql.DB) *AgentStore { return &AgentStore{db: db} }
+func NewAgentStore(d *db.DB) *AgentStore { return &AgentStore{db: d} }
 
 // buildMetadata folds the RFC-1000 §5 registration fields that have no
 // dedicated top-level slot in the RFC-1800 §3 Agent shape into metadata
@@ -40,7 +40,7 @@ func buildMetadata(req model.RegisterRequest) map[string]any {
 // moves straight to READY.
 func (s *AgentStore) Create(ctx context.Context, req model.RegisterRequest) (model.Agent, error) {
 	agentID := idgen.New("agent")
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 	load := 0.0
 	if req.CurrentLoad != nil {
 		load = *req.CurrentLoad
@@ -73,7 +73,7 @@ func (s *AgentStore) Update(ctx context.Context, agentID string, req model.Regis
 	caps := orEmptySlice(req.Capabilities)
 	constraints := orEmptyMap(req.Constraints)
 	metadata := buildMetadata(req)
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := dbNow()
 
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE agents SET capabilities=?, tools=?, skills=?, constraints=?, preferred_roles=?, evidence=?, operator=?, load=?, metadata=?, updated_at=?

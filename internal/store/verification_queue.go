@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
 	"aichatdeck/internal/model"
 )
@@ -24,7 +25,7 @@ func verificationBackoff(attempts int) time.Duration {
 }
 
 func (s *TaskStore) ClaimVerification(ctx context.Context, viewer string) (*model.VerificationJob, error) {
-	return s.claimVerificationAt(ctx, viewer, time.Now().UTC())
+	return s.claimVerificationAt(ctx, viewer, dbNow())
 }
 
 func (s *TaskStore) claimVerificationAt(ctx context.Context, viewer string, now time.Time) (*model.VerificationJob, error) {
@@ -33,7 +34,7 @@ func (s *TaskStore) claimVerificationAt(ctx context.Context, viewer string, now 
 		return nil, err
 	}
 	defer tx.Rollback()
-	stamp := now.UTC().Format(time.RFC3339)
+	stamp := now.UTC()
 	var taskID, messageID string
 	var attempts int
 	err = tx.QueryRowContext(ctx, `SELECT j.task_id, j.message_id, j.attempts FROM verification_jobs j
@@ -42,7 +43,7 @@ func (s *TaskStore) claimVerificationAt(ctx context.Context, viewer string, now 
 		AND t.status='SUBMITTED' AND t.submitted_message_id=j.message_id AND t.created_by=? AND t.owner<>?
 		AND (t.project_id IS NULL OR EXISTS (SELECT 1 FROM projects p WHERE p.project_id=t.project_id AND p.status='active'
 		AND (p.visibility='open' OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id=p.project_id AND m.agent_id=? AND m.status='active'))))
-		ORDER BY j.next_at,j.task_id LIMIT 1`, maxVerificationAttempts, stamp, stamp, viewer, viewer, viewer).Scan(&taskID, &messageID, &attempts)
+		ORDER BY j.next_at,j.task_id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`, maxVerificationAttempts, stamp, stamp, viewer, viewer, viewer).Scan(&taskID, &messageID, &attempts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -51,7 +52,7 @@ func (s *TaskStore) claimVerificationAt(ctx context.Context, viewer string, now 
 	}
 	job := &model.VerificationJob{AttemptID: idgen.New("verify-attempt"), Attempts: attempts + 1, LeaseUntil: now.Add(verificationLease)}
 	_, err = tx.ExecContext(ctx, `UPDATE verification_jobs SET attempts=attempts+1, attempt_id=?, lease_until=?, next_at=? WHERE task_id=?`,
-		job.AttemptID, job.LeaseUntil.UTC().Format(time.RFC3339), job.LeaseUntil.Add(verificationBackoff(job.Attempts)).UTC().Format(time.RFC3339), taskID)
+		job.AttemptID, job.LeaseUntil.UTC(), job.LeaseUntil.Add(verificationBackoff(job.Attempts)).UTC(), taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -71,25 +72,29 @@ func (s *TaskStore) claimVerificationAt(ctx context.Context, viewer string, now 
 
 // Finish in the same transaction as the verdict. A late process cannot commit
 // a verdict for a different attempt, even when both processes share an agent ID.
-func finishVerificationJob(ctx context.Context, tx *sql.Tx, taskID string, req model.VerifyRequest, now time.Time) error {
-	var attemptID, lease string
+func finishVerificationJob(ctx context.Context, tx *db.Tx, taskID string, req model.VerifyRequest, now time.Time) error {
+	var attemptID string
+	var leased bool
 	var attempts int
-	err := tx.QueryRowContext(ctx, `SELECT attempt_id,lease_until,attempts FROM verification_jobs WHERE task_id=?`, taskID).Scan(&attemptID, &lease, &attempts)
+	// Compare in SQL: an idle job's lease_until is '-infinity', which has no time.Time form.
+	err := tx.QueryRowContext(ctx, `SELECT attempt_id,lease_until>?,attempts FROM verification_jobs WHERE task_id=? FOR UPDATE`, now, taskID).Scan(&attemptID, &leased, &attempts)
 	if errors.Is(err, sql.ErrNoRows) && req.AttemptID == "" {
 		return nil
 	} // legacy/manual record
 	if err != nil {
 		return err
 	}
-	stamp := now.UTC().Format(time.RFC3339)
 	if req.AttemptID != "" {
-		if attemptID != req.AttemptID || lease <= stamp {
+		if attemptID != req.AttemptID || !leased {
 			return model.Conflict("verification attempt is stale or expired")
 		}
-	} else if attemptID != "" && lease > stamp {
+	} else if attemptID != "" && leased {
 		return model.Conflict("verification is leased; provide its attempt_id or wait for expiry")
 	}
-	done := req.Verdict != "inconclusive"
-	_, err = tx.ExecContext(ctx, `UPDATE verification_jobs SET done=?, attempt_id='', lease_until='', next_at=? WHERE task_id=?`, done, now.Add(verificationBackoff(attempts)).UTC().Format(time.RFC3339), taskID)
+	done := 0
+	if req.Verdict != "inconclusive" {
+		done = 1
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE verification_jobs SET done=?, attempt_id='', lease_until='-infinity', next_at=? WHERE task_id=?`, done, now.Add(verificationBackoff(attempts)).UTC(), taskID)
 	return err
 }

@@ -2,23 +2,24 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"aichatdeck/internal/db"
+	"aichatdeck/internal/db/dbtest"
 	"aichatdeck/internal/model"
 )
 
 func openTestDB(t *testing.T) *AgentStoreSet {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "test.db")
+	path := dbtest.URL(t)
 	sqlDB, err := db.Open(path)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { sqlDB.Close() })
 	return &AgentStoreSet{
+		URL:    path,
 		Agents: NewAgentStore(sqlDB),
 		Tasks:  NewTaskStore(sqlDB),
 		Msgs:   NewMessageStore(sqlDB),
@@ -27,9 +28,17 @@ func openTestDB(t *testing.T) *AgentStoreSet {
 
 // AgentStoreSet bundles the stores a test needs; avoids repeating wiring.
 type AgentStoreSet struct {
+	URL    string
 	Agents *AgentStore
 	Tasks  *TaskStore
 	Msgs   *MessageStore
+}
+
+// failTrigger returns DDL that aborts every matching write to table, so a
+// test can prove the surrounding transaction rolls back as a whole.
+func failTrigger(name, event, table, when string) string {
+	return `CREATE FUNCTION ` + name + `() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected failure'; END $$;
+		CREATE TRIGGER ` + name + ` BEFORE ` + event + ` ON ` + table + ` FOR EACH ROW ` + when + ` EXECUTE FUNCTION ` + name + `()`
 }
 
 func mustCreateAgent(t *testing.T, s *AgentStore) model.Agent {

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 
+	"aichatdeck/internal/metrics"
 	"aichatdeck/internal/model"
 )
 
@@ -51,6 +52,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, err)
 		return
 	}
+	metrics.Registrations.Inc()
 	writeJSON(w, http.StatusCreated, model.RegisterResponse{Agent: agent, Credential: cred})
 }
 
