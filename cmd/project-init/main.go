@@ -1,5 +1,6 @@
-// Command project-init creates a platform project bound to the current Git
-// repository and writes the non-secret project configuration agents consume.
+// Command project-init writes the non-secret project configuration agents
+// consume (.aichatdeck/project.json), creating a project bound to the current
+// Git repository unless the repository already has one.
 package main
 
 import (
@@ -43,8 +44,20 @@ func main() {
 	}
 	c := agent.NewClient(*base)
 	c.AgentID, c.Token = state.AgentID, state.Token
-	p, err := c.CreateProject(context.Background(), model.CreateProjectRequest{Name: *name, Objective: *objective, Visibility: *visibility, Repository: repo})
+	ctx := context.Background()
+	// agent-connect auto-creates a project for the repository on first
+	// connect, and the owner has to connect before running this. Reuse that
+	// project (the oldest, the one agent-connect picks) instead of binding a
+	// second project to the same repository.
+	existing, err := c.FindProjectsByRepository(ctx, repo)
 	if err != nil {
+		log.Fatalf("find project for repository: %v", err)
+	}
+	var p model.Project
+	if len(existing) > 0 {
+		p = existing[0]
+		fmt.Printf("repository already bound to %s (%q); writing config for it, -name ignored\n", p.ProjectID, p.Name)
+	} else if p, err = c.CreateProject(ctx, model.CreateProjectRequest{Name: *name, Objective: *objective, Visibility: *visibility, Repository: repo}); err != nil {
 		log.Fatalf("create project: %v", err)
 	}
 	path := filepath.Join(".aichatdeck", "project.json")
