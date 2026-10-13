@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"unicode"
 
 	"aichatdeck/internal/db"
 	"aichatdeck/internal/idgen"
@@ -211,10 +212,21 @@ func (s *KnowledgeStore) Search(ctx context.Context, viewer string, filter model
 			args = append(args, *filter.ProjectID)
 		}
 	}
+	// A text query ranks by relevance instead of paging by time: agents ask
+	// for "what do we know about X" and need the best matches first.
+	terms := searchTerms(filter.Query)
 	if filter.Query != "" {
-		where = append(where, "(content ILIKE ? OR tags ILIKE ?)")
 		like := "%" + filter.Query + "%"
-		args = append(args, like, like)
+		if terms == "" {
+			where = append(where, "(content ILIKE ? OR tags ILIKE ?)")
+			args = append(args, like, like)
+		} else {
+			where = append(where, "(search @@ to_tsquery('russian', ?) OR content ILIKE ? OR tags ILIKE ?)")
+			args = append(args, terms, like, like)
+		}
+	}
+	if filter.Cursor != "" && terms != "" {
+		return nil, "", model.ValidationError("cursor cannot be combined with q: results are ranked, use limit")
 	}
 	if filter.Cursor != "" {
 		ts, id, ok := decodeCursor(filter.Cursor)
@@ -229,8 +241,13 @@ func (s *KnowledgeStore) Search(ctx context.Context, viewer string, filter model
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
 	}
-	q += " ORDER BY created_at, knowledge_id LIMIT ?"
-	args = append(args, limit+1)
+	if terms != "" {
+		q += " ORDER BY ts_rank_cd(search, to_tsquery('russian', ?)) DESC, created_at, knowledge_id LIMIT ?"
+		args = append(args, terms, limit)
+	} else {
+		q += " ORDER BY created_at, knowledge_id LIMIT ?"
+		args = append(args, limit+1)
+	}
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -269,6 +286,15 @@ func (s *KnowledgeStore) Search(ctx context.Context, viewer string, filter model
 		out = filtered
 	}
 	return out, nextCursor, nil
+}
+
+// searchTerms turns free text into an OR tsquery of its words. Only letters
+// and digits survive, so user input can never smuggle tsquery operators.
+func searchTerms(q string) string {
+	words := strings.FieldsFunc(strings.ToLower(q), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	return strings.Join(words, " | ")
 }
 
 func nullableString(s *string) any {

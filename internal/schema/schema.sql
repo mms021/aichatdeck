@@ -191,6 +191,14 @@ CREATE TABLE IF NOT EXISTS knowledge (
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_scope ON knowledge(project_id, status, category);
 CREATE INDEX IF NOT EXISTS idx_knowledge_task ON knowledge(task_id);
+-- Full-text index over the string values of content and tags. The russian
+-- configuration stems Cyrillic words with the Russian stemmer and Latin ones
+-- with the English stemmer, so it covers both languages agents write in.
+ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS search tsvector GENERATED ALWAYS AS (
+  jsonb_to_tsvector('russian', content::jsonb, '["string"]') ||
+  jsonb_to_tsvector('russian', tags::jsonb, '["string"]')
+) STORED;
+CREATE INDEX IF NOT EXISTS idx_knowledge_search ON knowledge USING GIN (search);
 
 CREATE TABLE IF NOT EXISTS artifacts (
   artifact_id TEXT PRIMARY KEY,

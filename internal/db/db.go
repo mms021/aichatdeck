@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -144,4 +145,34 @@ func (t *Tx) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows
 
 func (t *Tx) QueryRowContext(ctx context.Context, q string, args ...any) *sql.Row {
 	return t.Tx.QueryRowContext(ctx, Rebind(q), args...)
+}
+
+// ScratchSchema creates an empty schema in the database at baseURL and returns
+// a URL whose search_path points at it, plus a func that drops it. Tests and
+// evals use it to get an isolated database without creating one.
+func ScratchSchema(baseURL, prefix string) (string, func(), error) {
+	admin, err := sql.Open("pgx", baseURL)
+	if err != nil {
+		return "", nil, err
+	}
+	defer admin.Close()
+	name := prefix + "_" + strings.ReplaceAll(idgen.UUIDv4(), "-", "_")
+	if _, err := admin.Exec(`CREATE SCHEMA ` + name); err != nil {
+		return "", nil, fmt.Errorf("create scratch schema: %w", err)
+	}
+	drop := func() {
+		if admin, err := sql.Open("pgx", baseURL); err == nil {
+			_, _ = admin.Exec(`DROP SCHEMA ` + name + ` CASCADE`)
+			admin.Close()
+		}
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		drop()
+		return "", nil, err
+	}
+	q := u.Query()
+	q.Set("search_path", name)
+	u.RawQuery = q.Encode()
+	return u.String(), drop, nil
 }

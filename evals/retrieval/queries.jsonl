@@ -1,0 +1,30 @@
+{"id": "q-pool-size", "query": "сколько соединений в пуле postgres", "relevant": ["k-pg-pool"], "tags": ["ru", "keyword"], "source": "author-written"}
+{"id": "q-timestamps", "query": "в каком типе хранится время", "relevant": ["k-pg-timestamptz"], "tags": ["ru", "paraphrase"], "source": "author-written"}
+{"id": "q-two-verifiers", "query": "как два верификатора не получают одно задание", "relevant": ["k-skip-locked"], "tags": ["ru", "paraphrase"], "source": "author-written"}
+{"id": "q-skip-locked", "query": "SKIP LOCKED", "relevant": ["k-skip-locked"], "tags": ["exact"], "source": "author-written"}
+{"id": "q-key-revoke", "query": "ротация ключей и отзыв", "relevant": ["k-rotation-race"], "tags": ["ru", "inflection"], "source": "author-written"}
+{"id": "q-kafka-outage", "query": "что будет если kafka упадёт", "relevant": ["k-kafka-down", "k-outbox"], "tags": ["ru", "paraphrase"], "source": "author-written"}
+{"id": "q-outbox", "query": "outbox", "relevant": ["k-outbox", "k-kafka-down", "k-watch-seq", "k-en-relay-lock"], "tags": ["exact"], "source": "author-written"}
+{"id": "q-stream-cursor", "query": "почему курсор стрима по seq", "relevant": ["k-watch-seq"], "tags": ["ru", "inflection"], "source": "author-written"}
+{"id": "q-grpc-token", "query": "как передать токен в grpc", "relevant": ["k-grpc-auth"], "tags": ["ru", "mixed"], "source": "author-written"}
+{"id": "q-metrics-port", "query": "на каком порту метрики", "relevant": ["k-metrics-port"], "tags": ["ru", "inflection"], "source": "author-written"}
+{"id": "q-dashboard", "query": "где дашборд графаны", "relevant": ["k-grafana"], "tags": ["ru", "inflection"], "source": "author-written"}
+{"id": "q-slow-tests", "query": "почему тесты медленные", "relevant": ["k-docker-tests"], "tags": ["ru", "inflection"], "source": "author-written"}
+{"id": "q-parallel-tests", "query": "параллельный запуск тестов", "relevant": ["k-test-schema"], "tags": ["ru", "inflection"], "source": "author-written"}
+{"id": "q-injection", "query": "защита от prompt injection", "relevant": ["k-injection-fence"], "tags": ["mixed"], "source": "author-written"}
+{"id": "q-unsure-verdict", "query": "что ставить верификатору если доказательств нет", "relevant": ["k-false-verify"], "tags": ["ru", "paraphrase"], "source": "author-written"}
+{"id": "q-artifact-size", "query": "лимит размера артефакта", "relevant": ["k-artifact-limits"], "tags": ["ru", "inflection"], "source": "author-written"}
+{"id": "q-artifact-scheme", "query": "можно ли file:// для артефактов", "relevant": ["k-artifact-https"], "tags": ["ru", "mixed"], "source": "author-written"}
+{"id": "q-lease-extend", "query": "как продлить аренду задачи", "relevant": ["k-lease"], "tags": ["ru", "inflection"], "source": "author-written"}
+{"id": "q-verify-attempts", "query": "сколько попыток проверки", "relevant": ["k-verify-retries"], "tags": ["ru", "inflection"], "source": "author-written"}
+{"id": "q-retry-command", "query": "команда telegram для повторной проверки", "relevant": ["k-telegram-retry"], "tags": ["ru", "inflection"], "source": "author-written"}
+{"id": "q-not-found", "query": "почему закрытый проект отвечает not_found", "relevant": ["k-closed-project"], "tags": ["ru", "mixed"], "source": "author-written"}
+{"id": "q-transfer", "query": "передача владения проектом", "relevant": ["k-ownership"], "tags": ["ru", "keyword"], "source": "author-written"}
+{"id": "q-register-limit", "query": "лимит регистрации агентов", "relevant": ["k-ratelimit"], "tags": ["ru", "inflection"], "source": "author-written"}
+{"id": "q-redis-role", "query": "зачем нужен redis", "relevant": ["k-redis-bus"], "tags": ["ru", "paraphrase"], "source": "author-written"}
+{"id": "q-longpoll-wait", "query": "сколько ждёт long-poll", "relevant": ["k-longpoll"], "tags": ["ru", "paraphrase"], "source": "author-written"}
+{"id": "q-offline-tests", "query": "заглушка мозга для тестов без сети", "relevant": ["k-echo-brain"], "tags": ["ru", "inflection"], "source": "author-written"}
+{"id": "q-en-order", "query": "how is event order preserved", "relevant": ["k-en-relay-lock"], "tags": ["en", "paraphrase"], "source": "author-written"}
+{"id": "q-en-retry-create", "query": "retrying task creation", "relevant": ["k-en-idempotent"], "tags": ["en", "inflection"], "source": "author-written"}
+{"id": "q-en-restart-counts", "query": "metrics correct after restart", "relevant": ["k-en-scrape"], "tags": ["en", "keyword"], "source": "author-written"}
+{"id": "q-en-latency", "query": "kafka consumer latency", "relevant": ["k-en-delay"], "tags": ["en", "paraphrase"], "source": "author-written"}

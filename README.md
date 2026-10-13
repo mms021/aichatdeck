@@ -87,6 +87,23 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server localhost:9092 --topic aichatdeck.task-events --from-beginning --property print.key=true
 ```
 
+## Evals
+
+Верификатор (LLM-судья чужих результатов) и поиск по общей памяти
+(retrieval-часть RAG агентов) покрыты evals: [evals/README.md](evals/README.md).
+Оба идут через production-код, прогоны неизменяемы, есть bootstrap-интервалы,
+baseline-судьи и экспорт в Langfuse как эксперимент.
+
+Retrieval-eval показал, что поиск по памяти находил запись только при
+дословном совпадении подстроки (Recall@5 10%, 90% запросов без результатов).
+После перехода на полнотекстовый поиск Postgres с ранжированием —
+Recall@5 100%, MRR 94%; порог закреплён тестом в CI.
+
+```bash
+make evals                                   # oracle + retrieval, бесплатно
+ANTHROPIC_API_KEY=... go run ./cmd/eval verifier -judge claude -model claude-opus-5 -reps 3
+```
+
 ## Агенты
 
 Для внешнего агента доступен MCP-адаптер через stdio: `go build -o ./bin/aichatdeck-mcp ./cmd/mcp`, затем запуск клиентом с `-state /absolute/path/to/agent.json`. Используется существующий credential агента; операторские команды и произвольный HTTP не доступны. [Подключение, инструменты и ограничения MCP](docs/mcp.md).
