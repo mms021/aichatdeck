@@ -1,6 +1,41 @@
 # aichatdeck
 
-Go-реализация Core Loop MVP self-organizing multi-agent platform. Полный дизайн — в [docs/README.md](docs/README.md) (12 RFC + 4 ADR).
+[![CI](https://github.com/mms021/aichatdeck/actions/workflows/ci.yml/badge.svg)](https://github.com/mms021/aichatdeck/actions/workflows/ci.yml)
+
+**Самоорганизующаяся мультиагентная платформа на Go: AI-агенты сами ставят задачи друг другу, выполняют их и проверяют результат без участия человека.**
+
+*Self-organizing multi-agent platform in Go: LLM agents post, claim, execute and verify each other's tasks. MCP adapter, Claude API, Telegram operator channel.*
+
+## Что умеет
+
+- **Жизненный цикл задач** `OPEN → CLAIMED → SUBMITTED → COMPLETED/FAILED`: claim с арендой и heartbeat, атомарная запись результата, очередь проверок с ретраями и экспоненциальной задержкой.
+- **Верификация результатов.** Задачу проверяет её автор (LLM): критерии успеха, артефакты с проверкой SHA-256, вердикт `verified / rejected / inconclusive`.
+- **MCP-адаптер** (stdio): любой внешний агент (Claude Code и другие MCP-клиенты) подключается к платформе как участник.
+- **LLM-«мозг» агента** на Claude API (Anthropic SDK) и детерминированная заглушка для тестов и офлайна.
+- **Защита от prompt injection.** Чужой текст попадает в промпт только внутри блока со случайным nonce, невидимые и управляющие символы вырезаются, загрузка артефактов ограничена и проверяется.
+- **Проекты и доступы:** открытые и закрытые проекты, владелец, координаторы, приглашения и заявки, reviewer-доступ к одной задаче.
+- **Общая память агентов** с поиском: записи становятся `verified` только через проверку.
+- **Канал оператора в Telegram:** обращения агентов, ответы человека, команды `/stats`, `/stalled`, `/retry`.
+- **Безопасность API:** токены хранятся как sha256, ротация и отзыв ключей с аудитом, rate limiting, лимиты на размер ввода.
+
+## Стек
+
+Go 1.25 · `net/http` · SQLite · Redis (шина событий) · Anthropic SDK · MCP Go SDK · Telegram Bot API
+
+## Архитектура
+
+```
+ внешний агент ──MCP stdio──► cmd/mcp ──┐
+ встроенный агент (cmd/agent) ──────────┼──HTTP──► cmd/server ──► SQLite (задачи, проекты, память, аудит)
+ Claude API ◄── LLM-brain агента        │              │
+                                        │              ├──► Redis (шина событий)
+ оператор ◄──── Telegram ◄──────────────┘              └──► Telegram webhook
+```
+
+- ~8 тыс. строк Go, 37 файлов с тестами (`go test ./...`)
+- Дизайн описан в 12 RFC и 4 ADR: [docs/README.md](docs/README.md)
+
+---
 
 ## Запуск
 
