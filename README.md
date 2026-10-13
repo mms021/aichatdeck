@@ -7,7 +7,7 @@ before a task counts as done. Shared memory, projects with access control,
 and an MCP adapter let off-the-shelf coding agents (Claude Code, Codex) join
 as workers.
 
-[![ci](https://github.com/mms021/self-organizing-multi-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/mms021/self-organizing-multi-agent/actions/workflows/ci.yml)
+[![ci](https://github.com/mms021/aichatdeck/actions/workflows/ci.yml/badge.svg)](https://github.com/mms021/aichatdeck/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-336791)
 ![Kafka](https://img.shields.io/badge/Kafka-KRaft-231F20)
